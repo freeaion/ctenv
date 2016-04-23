@@ -1,0 +1,2310 @@
+#!/bin/bash
+# -------------------------------------------------------------------------
+# ctenv_utils.lib: a set of utility functions for ctenv
+#
+# Copyright 2016 by Yonghyun Hwang <freeaion@gmail.com>
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# Some rights reserved.
+# -------------------------------------------------------------------------
+
+if [ -z ${CTENV_GCONST_UTILS_LIB_INIT_FLAG:-} ]; then
+    CTENV_GCONST_UTILS_LIB_INIT_FLAG="TRUE"
+else
+    # ctenv_utils.lib is already sourced
+    return 0
+fi
+
+# global configuration parameters for ctenv
+# need to find automatically by parsing where ctenv is
+CTENV_GCONST_VERSION="1.0.0"
+if [ -z ${CTENV_GCONST_PATH_CTENV:-} ]; then
+    echo -n "CTENV[ERROR|`date +'%m/%d %H:%M'`]: environment for ctenv is not set properly. stopping now"
+    return 1
+fi
+CTENV_GCONST_PATH_LIB=${CTENV_GCONST_PATH_CTENV}/lib
+CTENV_GCONST_PATH_DAT=${CTENV_GCONST_PATH_CTENV}/dat
+CTENV_GCONST_PATH_CS=${CTENV_GCONST_PATH_CTENV}/cs
+CTENV_GCONST_PATH_ENV=${HOME}/.ctenv
+CTENV_GCONST_TUTORIAL_FILE="tutorial.txt"
+CTENV_GCONST_IMPORT_SCR_FILE="import.sh"
+CTENV_GCONST_SETUP_SCR_FILE="setup.sh"
+CTENV_GCONST_SELFEXT_FILE="selfext.sh"
+CTENV_GCONST_RC_FILE="ctenvrc"
+CTENV_GCONST_VW_LIST_FILE="ctenv_vw_list"
+CTENV_GCONST_CC_LIST_DIR="cc_file"
+CTENV_GCONST_CC_LIST_FILE_EXT="cfl"
+CTENV_GCONST_CC_LIST_FILE="ctenv_cc_file_list"
+CTENV_GCONST_LOG_FILENAME=""
+
+CTENV_GCONST_PWD=`pwd -P`
+CTENV_GCONST_UTIL="util"
+
+# GLOBAL variable definition
+CTENV_GARRAY_TMP_FILES=() # tmp files
+CTENV_GARRAY_EMAIL_TO=()
+
+function ctenv_utils_prt_success
+{
+    echo -n "CTENV[SUCCESS|`date +'%m/%d %H:%M'`]::$1: "
+    shift
+    echo "$@"
+    return 0
+}
+
+function ctenv_utils_prt_error
+{
+    echo -n "CTENV[ERROR|`date +'%m/%d %H:%M'`]::$1: " &>2
+    shift
+    echo "$@" &>2
+    return 0
+}
+
+function ctenv_utils_prt_warn
+{
+    echo -n "CTENV[WARN|`date +'%m/%d %H:%M'`]::$1: "
+    shift
+    echo "$@"
+    return 0
+}
+
+function ctenv_utils_prt_info
+{
+    echo -n "CTENV[INFO|`date +'%m/%d %H:%M'`]::$1: "
+    shift
+    echo "$@"
+    return 0
+}
+
+function ctenv_utils_readlink
+{
+    local path=${1:-}
+
+    if [ -z ${path} ]; then
+        echo ""
+        return 1
+    fi
+
+    # solaris doesn't have readlink. :'(
+    if [ -d ${path} ]; then
+        pushd ${path} &> /dev/null
+        echo $PWD
+    elif [ -f ${path} ]; then
+        pushd $(dirname ${path}) &> /dev/null
+        echo $PWD/$(basename ${path})
+    else
+        echo ""
+        return 1
+    fi
+    popd &> /dev/null
+
+    return 0
+}
+
+function ctenv_utils_dos2unix
+{
+    local file=${1:-}
+    local ostype=`uname -s`
+
+    if [ -z ${file} ]; then
+        return 1
+    elif [ ! -f ${file} ]; then
+        return 1
+    fi
+
+    if [ ${ostype} = 'Linux' ]; then
+        /usr/bin/dos2unix ${file} &> /dev/null
+        return $?
+    fi
+
+    return 0
+}
+
+function ctenv_utils_is_cmd_args
+{
+    local param=${1:-}
+
+    # assuming NULL is not command line args
+    if [ -z ${param} ]; then
+        return 1
+    fi
+
+    #if [[ ${param} =~ "-.*" ]]; then
+    if grep "\-.*" <<<${param} &> /dev/null; then
+        return 1
+    elif [ ${param} = "." ]; then
+        return 1
+    fi
+
+    if [ -f ${param} ]; then
+        :
+    elif [ -d ${param} ]; then
+        :
+    else
+        return 1
+    fi
+
+    return 0
+}
+
+function ctenv_utils_is_cmd_opts
+{
+    local opt=${1:-}
+
+    # assuming NULL is not command line args
+    if [ -z ${opt} ]; then
+        return 1
+    fi
+
+    #if [[ $opt =~ "-.*" ]] ; then
+    if grep "-.*" <<<$opt &> /dev/null; then
+        return 0
+    fi
+
+    if ctenv_utils_is_number $opt; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+function ctenv_utils_confirm_usr_decision
+{
+    local str=${1:-}
+    local decision=""
+
+    while [ 1 ]; do
+        printf "${str} [Y/N]? "
+        read -n 1 decision
+        echo ""
+
+        decision=`echo $decision |  tr "[:lower:]" "[:upper:]"`
+
+        if [ -z $decision ]; then
+    	    continue
+        elif [ $decision == "Y" ]; then
+            return 0
+        elif [ $decision == "N" ]; then
+            return 1
+        fi
+    done
+
+    # default is "NO"
+    return 1
+}
+
+function ctenv_utils_get_usr_string
+{
+    local mesg=${1:-}
+    local str=""
+
+    while [ 1 ]; do
+        printf "${mesg} "
+        read str
+        echo ""
+
+        printf "you input: ${str}\n"
+        if ctenv_utils_confirm_usr_decision "is it correct?" ; then
+            break
+        fi
+    done
+
+    echo "${str}"
+}
+
+function ctenv_utils_confirm_dir_create
+{
+    local dir=${1:-}
+
+    if [ -z ${dir} ]; then
+        ctenv_utils_prt_error "${CTENV_GCONST_UTIL}" "no dir is given"
+        return 1
+    fi
+
+    if ! ctenv_utils_confirm_usr_decision \
+        "Want to create it?"; then
+       ctenv_utils_prt_info "${CTENV_GCONST_UTIL}" "${dir} is not created"
+	    return 1
+    else
+        if mkdir -p ${dir} &> /dev/null; then
+           ctenv_utils_prt_info "${CTENV_GCONST_UTIL}" "${dir}, is created successfully"
+            return 0
+        else
+            ctenv_utils_prt_error "${CTENV_GCONST_UTIL}" "fail to create ${dir}"
+	        return 1
+        fi
+    fi
+
+    return 0
+}
+
+function ctenv_utils_chk_ctenv_env
+{
+    if [ ! -f ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_RC_FILE} ]; then
+        ctenv_utils_prt_info "INIT" \
+            "ctenv has not been configured yet"
+
+        if ! ctenv_utils_confirm_usr_decision \
+            "Want to create a default configuration for CTENV?"; then
+           ctenv_utils_prt_info "INIT" "To run ctenv, you should configure its environment just once."
+	        return 1
+        else
+            if mkdir -p ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_CC_LIST_DIR} &&
+               cp ${CTENV_GCONST_PATH_DAT}/${CTENV_GCONST_RC_FILE} ${CTENV_GCONST_PATH_ENV};
+            then
+                ctenv_utils_update_lines ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_RC_FILE} \
+                                         "\${LOGNAME}" "`whoami`"
+                ctenv_utils_prt_info "INIT" "default configuration is created successfully. the configuration sits in ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_RC_FILE}. if you want to configure CTENV, please open/edit it."
+                return 1
+            else
+                ctenv_utils_prt_error "INIT" "fail to create a template configuration for ctenv. please report this to yonghyun.hwang@oracle.com to have a support"
+                return 1
+            fi
+        fi
+    else
+        source ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_RC_FILE}
+    fi
+
+    if [ -z ${CTENV_UCONF_SNAPSHOT_ROOT_DIR:-} ]; then
+       ctenv_utils_prt_error "INIT" "snapshot root is NULL. please edit your ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_RC_FILE} to set your snapshot root, CTENV_UCONF_SNAPSHOT_ROOT_DIR"
+	    return 1
+    fi
+
+    if [ ! -d ${CTENV_UCONF_SNAPSHOT_ROOT_DIR} ]; then
+       ctenv_utils_prt_error "INIT" "CTENV_UCONF_SNAPSHOT_ROOT_DIR, ${CTENV_UCONF_SNAPSHOT_ROOT_DIR}, doesn't exist."
+
+        if ! ctenv_utils_confirm_dir_create ${CTENV_UCONF_SNAPSHOT_ROOT_DIR}; then
+           ctenv_utils_prt_info "INIT" "To run ctenv, you should have CTENV_UCONF_SNAPSHOT_ROOT_DIR"
+	        return 1
+        fi
+    fi
+
+    if [ ! -z ${CTENV_UCONF_CONFIG_SPEC_DIR:-} ] &&
+        [ ! -d ${CTENV_UCONF_CONFIG_SPEC_DIR} ]; then
+       ctenv_utils_prt_error "INIT" "config spec root, CTENV_UCONF_CONFIG_SPEC_DIR, ${CTENV_UCONF_CONFIG_SPEC_DIR}, doesn't exist."
+
+        if ! ctenv_utils_confirm_dir_create ${CTENV_UCONF_CONFIG_SPEC_DIR}; then
+           ctenv_utils_prt_info "INIT" "To run ctenv, you should have CTENV_UCONF_CONFIG_SPEC_DIR if it's defined"
+	        return 1
+        fi
+    fi
+
+    return 0
+}
+
+# solaris doesn't have 'whoami'
+function ctenv_utils_get_whoami
+{
+    local ostype=`uname -s`
+
+    if [ ${ostype} = 'Linux' ]; then
+        whoami
+    else
+        local who=(`who am i`)
+        echo ${who[0]}
+    fi
+
+    return 0
+}
+
+function ctenv_utils_get_clearcase_date
+{
+    date +%d-%b-%Y.%H:%M
+}
+
+function ctenv_utils_mktemp
+{
+    local ostype=`uname -s`
+
+    if [ ${ostype} = 'AIX' ]; then
+        local fn=/tmp/XXX-$(od -N4 -tu /dev/random | awk 'NR==1 {print $2} {}')
+        touch ${fn} && echo ${fn}
+    else
+        mktemp $@
+    fi
+
+    return $?
+}
+
+#fn=$(ctenv_utils_get_tmp_file)
+#ctenv_utils_add_tmp_file_list ${fn}
+function ctenv_utils_get_tmp_file
+{
+    local tmpFilename=""
+
+    # handle a prefix
+    if [ -z "${1:-}" ]; then
+        tmpFilename=$(ctenv_utils_mktemp /tmp/`ctenv_utils_get_whoami`_CTENV_TMP.XXXXX)
+    else
+        tmpFilename=$(ctenv_utils_mktemp /tmp/${1}_`ctenv_utils_get_whoami`_CTENV_TMP.XXXXX)
+    fi
+
+    # handle a suffix
+    if [ ! -z "${2:-}" ]; then
+        local suffix="${2:-}"
+        if [ "${suffix}" = "${suffix//\//_}" ]; then
+            mv ${tmpFilename} ${tmpFilename}.${suffix}
+            tmpFilename=${tmpFilename}.${suffix}
+        fi
+    fi
+
+    if [ $? -eq 0 ]; then
+	    echo ${tmpFilename}
+    else
+	    echo ""
+    fi
+
+    return 0
+}
+
+function ctenv_utils_get_tmp_dir
+{
+    local tmpFilename=""
+
+    # handle a prefix
+    if [ -z ${1:-} ]; then
+        tmpFilename=$(ctenv_utils_mktemp -d /tmp/`ctenv_utils_get_whoami`_CTENV_TMP.XXXXX)
+    else
+        tmpFilename=$(ctenv_utils_mktemp -d /tmp/${1}_`ctenv_utils_get_whoami`_CTENV_TMP.XXXXX)
+    fi
+
+    # handle a suffix
+    if [ ! -z ${2:-} ]; then
+       mv ${tmpFilename} ${tmpFilename}.${2}
+       tmpFilename=${tmpFilename}.${2}
+    fi
+
+    if [ $? -eq 0 ]; then
+	    echo ${tmpFilename}
+    else
+	    echo ""
+    fi
+
+    return 0
+}
+
+function ctenv_utils_add_tmp_file_list
+{
+    local filename=${1:-}
+    if [ -z ${filename} ]; then
+	    return 1
+    else
+       CTENV_GARRAY_TMP_FILES[${#CTENV_GARRAY_TMP_FILES[@]}]=${filename}
+	    return 0
+    fi
+}
+
+function ctenv_utils_remove_tmp_files
+{
+    local -i i=0
+    for (( i=0; i<${#CTENV_GARRAY_TMP_FILES[@]}; i++)); do
+       rm -fr ${CTENV_GARRAY_TMP_FILES[i]} >& /dev/null
+    done
+
+    CTENV_GARRAY_TMP_FILES=()
+
+    return 0
+}
+
+function ctenv_utils_update_lines
+{
+    local file="${1:-}"
+    local oldPattern="${2:-}"
+    local newPattern="${3:-}"
+
+    # wrong param or file doesn't exist
+    if [ -z "${file}" ] || [ ! -f "${file}" ]; then
+        return 0
+    fi
+
+    # if no patterns are given
+    if [ -z "${newPattern}" ]; then
+        return 0
+    fi
+
+    local tmpFile=`ctenv_utils_get_tmp_file`
+    ctenv_utils_add_tmp_file_list ${tmpFile}
+
+    if sed -e "s|${oldPattern}|${newPattern}|g" ${file} >| ${tmpFile}; then
+        \mv -f ${tmpFile} ${file}
+    fi
+
+    return $?
+}
+
+function ctenv_utils_delete_lines
+{
+    local file=${1:-}
+    shift
+    local -a patterns=($@)
+
+    # wrong param or file doesn't exist
+    if [ -z ${file} ] || [ ! -f ${file} ]; then
+        return 0
+    fi
+
+    # if no patterns are given
+    if [ ${#patterns[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    local tmpFile=`ctenv_utils_get_tmp_file`
+    ctenv_utils_add_tmp_file_list ${tmpFile}
+
+    local sedOpts=""
+    local i=""
+    for i in ${patterns[@]}; do
+        sedOpts="${sedOpts} -e \"/${i}/d\""
+    done
+
+    if eval sed ${sedOpts} ${file} >| ${tmpFile}; then
+        \mv -f ${tmpFile} ${file}
+    fi
+
+    return 0
+}
+
+# this function is called when ctenv exits
+function ctenv_utils_exit
+{
+    # remove tmp files if any
+    ctenv_utils_remove_tmp_files
+
+    return $?
+}
+
+function ctenv_utils_prt_cmd_heading
+{
+    echo "======================"
+    echo "ctenv: ClearTool Environment $1"
+    echo "       tutorial: ${CTENV_GCONST_PATH_CTENV}/doc/${CTENV_GCONST_TUTORIAL_FILE}"
+    echo ""
+}
+
+function ctenv_utils_clear_logfile
+{
+    echo -n "" > ${CTENV_GCONST_LOG_FILENAME}
+}
+
+function ctenv_utils_is_number
+{
+    local number=${1:-}
+
+    if [ -z ${number} ]; then
+        return 1
+    fi
+
+    if grep '^[0-9]*$' <<<$number &> /dev/null ; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+function ctenv_utils_is_snapshot_view
+{
+    local tagIdx=${1:-}
+
+    # default to dyn view
+    if [ -z ${tagIdx} ]; then
+        return 1
+    fi
+
+    if [ ${tagIdx} -lt ${CTENV_GVAL_CLEARCASE_DYN_START} ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+function ctenv_utils_is_view_name
+{
+    local viewName=${1:-}
+
+    if [ -z ${viewName} ]; then
+        return 1
+    fi
+
+    if grep `ctenv_utils_get_whoami` <<< ${viewName} &> /dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+function ctenv_utils_has_branch
+{
+    local tagIdx=${1:-}
+
+    # no branch is default
+    if [ -z ${tagIdx} ]; then
+        return 1
+    fi
+
+    if [ -z ${CTENV_GVAL_CLEARCASE_BRINFO_LIST[tagIdx]} ]; then
+        return 1
+    else
+        return 0
+    fi
+}
+
+function ctenv_utils_get_vwtag_name
+{
+    local -a vwNameToken=()
+    IFS='/' read -a vwNameToken <<<"${1:-}"
+
+    case ${#vwNameToken[@]} in
+        0|1)
+            echo ""
+            return 1
+            ;;
+        *)
+            echo ${vwNameToken[${#vwNameToken[@]}-1]}
+            return 0
+            ;;
+    esac
+}
+
+function ctenv_utils_get_vw_name
+{
+    local -a vwNameToken=()
+    IFS='_' read -a vwNameToken <<<"$1"
+
+    case ${#vwNameToken[@]} in
+        0|1)
+            echo ""
+            return 1
+            ;;
+        *)
+            local -i i=0
+            local vwName="${vwNameToken[1]}"
+            # magic number 2 counts config spec & hostname
+            for ((i=2; i<${#vwNameToken[@]}-2; i++)); do
+                vwName="${vwName}_${vwNameToken[i]}"
+            done
+
+            echo ${vwName}
+            return 0
+            ;;
+    esac
+
+    echo ""
+    return 0
+}
+
+function ctenv_utils_get_cs_name
+{
+    local csNameToken=()
+    IFS='_' read -a csNameToken <<<"$1"
+
+    case ${#csNameToken[@]} in
+        0|1|2)
+            echo ""
+            return 0
+            ;;
+        *)
+            echo ${csNameToken[${#csNameToken[@]}-2]}
+            return 0
+            ;;
+    esac
+
+    echo ""
+    return 1
+}
+
+function ctenv_utils_get_host_name
+{
+    local csNameToken=()
+    IFS='_' read -a csNameToken <<<"$1"
+
+    case ${#csNameToken[@]} in
+        0|1|2|3)
+            echo ""
+            return 0
+            ;;
+        *)
+            echo ${csNameToken[${#csNameToken[@]}-1]}
+            return 0
+            ;;
+    esac
+
+    echo ""
+    return 1
+}
+
+function ctenv_utils_get_branch_name
+{
+    local file=${1:-}
+    if [ -z ${file} ] || [ ! -f ${file} ]; then
+        return 1
+    fi
+
+    local csValid="FALSE"
+    local brName=""
+    local line=""
+    local -a tokens=()
+    while read -r line; do
+        if grep "^\<mkbranch\>.*" <<<"$line" &> /dev/null; then
+            IFS=' ' read -a tokens <<< "$line"
+            if [ ${#tokens[@]} -ge 2 ]; then
+                if [ -z ${brName} ] || [ ${brName} = ${tokens[1]} ];then
+                    brName=${tokens[1]}
+                else
+                    return 1
+                fi
+            else
+                return 1
+            fi
+        elif grep "^\<end\>.*mkbranch.*" <<<"$line" &> /dev/null; then
+            IFS=' ' read -a tokens <<< "$line"
+            if [ ${#tokens[@]} -ge 3 ]; then
+                if [ -z ${brName} ]; then
+                    return 1
+                elif [ ${brName} != ${tokens[2]} ]; then
+                    return 1
+                else
+                    csValid="TRUE"
+                fi
+            else
+                return 1
+            fi
+        fi
+    done < <(grep -i 'mkbranch' ${file})
+
+    if [ ${csValid} = "TRUE" ]; then
+        echo ${brName}
+        return 0
+    elif [ ! -z ${brName} ]; then
+        echo ""
+        return 1
+    else
+        echo ""
+        return 0
+    fi
+}
+
+function ctenv_utils_create_brtype_obj
+{
+    local brName=${1:-}
+
+    if [ -z ${brName} ]; then
+        return 0
+    fi
+
+    if cleartool lstype -s brtype:${brName}@/${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT} &> /dev/null; then
+        ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+            "brtype obj, ${brName}, already exists. use it."
+        return 0
+    else
+        if cleartool mkbrtype -nc ${brName}@/${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT}; then
+            ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+                "brtype obj, ${brName}, is created"
+            return 0
+        else
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "fail to create brtype obj, ${brName}"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+function ctenv_utils_remove_brtype_obj
+{
+    local brName=${1:-}
+
+    if [ -z ${brName} ]; then
+        return 0
+    fi
+
+    if ! cleartool lstype -s brtype:${brName}@/${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT} &> /dev/null; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+            "brtype obj, ${brName}, doesn't exist."
+        return 1
+    else
+        ctenv_utils_prt_warn ${CTENV_GCONST_UTIL} \
+            "we're about to remove brtype obj, ${brName}"
+        ctenv_utils_prt_warn ${CTENV_GCONST_UTIL} \
+            "NOTE that we lose all info on the branch, ${brName}, once it gets removed"
+        if ctenv_utils_confirm_usr_decision "remove brtype obj, ${brName}"; then
+            if cleartool rmtype -rmall brtype:${brName}@/${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT}; then
+                ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+                    "brtype obj, ${brName}, is removed"
+                return 0
+            else
+                ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                    "fail to remove brtype obj, ${brName}"
+                return 1
+            fi
+        else
+            ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+                "brtype obj, ${brName}, is not removed"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+function ctenv_utils_make_vw_tag_name
+{
+    local vwName=$1
+    local csName=$2
+    local id=`ctenv_utils_get_whoami`
+    local host=`hostname`
+
+    echo "${id}_${vwName}_${csName}_${host}"
+
+    return 0
+}
+
+function ctenv_utils_make_br_name
+{
+    local vwName=$1
+    local csName=$2
+    local id=`ctenv_utils_get_whoami`
+
+    echo "${id}_${vwName}_${csName}"
+
+    return 0
+}
+
+function ctenv_utils_three_way_merge
+{
+    local myFile=${1:-}
+    local pred=${2:-}
+    local latest=${3:-}
+
+    if [ -z ${latest} ]; then
+       ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+            "invalid params are passed to ctenv_utils_three_way_merge. please report"
+        return 1
+    fi
+
+    local predFile=$(ctenv_utils_get_tmp_file "${myFile//\//_}_PRED" ${myFile##*\.})
+    ctenv_utils_add_tmp_file_list ${predFile}
+
+    rm -f ${predFile} && cleartool get -to ${predFile} ${pred}
+
+    local latestFile=$(ctenv_utils_get_tmp_file "${myFile//\//_}_LAT" ${myFile##*\.})
+    ctenv_utils_add_tmp_file_list ${latestFile}
+
+    rm -f ${latestFile} && cleartool get -to ${latestFile} ${latest}
+
+    local syncFile=$(ctenv_utils_get_tmp_file "${myFile//\//_}_SYNC" ${myFile##*\.})
+    ctenv_utils_add_tmp_file_list ${syncFile}
+
+    if rm -f ${syncFile} && \
+        diff3 -E -m ${myFile} ${predFile} ${latestFile} >| ${syncFile}; then
+        \cp -f ${syncFile} ${myFile}
+        ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+            "${myFile} is synced"
+        return 0
+    else
+       ctenv_utils_prt_info ${CTENV_GCONST_UTIL} "file, ${myFile}, has a conflict."
+       \cp -f ${syncFile} ${myFile}
+
+       ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+            "${myFile} is synced. Don't forget to resolve the conflict manually"
+       return 1
+    fi
+}
+
+function ctenv_utils_detect_platform
+{
+    local kernel="`uname -s`"
+    local processor=""
+    local platform=""
+
+    if [ ${kernel} = "Linux" ]; then
+        processor="`uname -m`"
+        if [ ${processor} = "x86_64" ]; then
+            platform="linuxamd64"
+        else
+            platform="linux"
+        fi
+    elif [ ${kernel} = "SunOS" ]; then
+        # for now, just solaris
+        #processor="`uname -m`"
+        platform="solaris64"
+    elif [ ${kernel} = "HP-UX" ]; then
+        #processor="`uname -m`"
+        # only 64bit support
+        platform="hpux64"
+    elif [ ${kernel} = "AIX" ]; then
+        platform="aix64"
+    else
+        platform=""
+    fi
+
+    echo ${platform}
+    return 0
+}
+
+CTENV_GVAL_CS_LIST=()
+CTENV_GVAL_CS_LOCAL_START=0
+function ctenv_utils_load_cs_list
+{
+    local csList=$(ls -l ${CTENV_GCONST_PATH_CS}/*.cs 2>/dev/null | tr -s ' ' | cut -d' ' -f9 | sort)
+    local -i j=0
+    local i=""
+    local -a tokens=()
+
+    for i in ${csList[@]}; do
+        local csName=`basename ${i} .cs`
+
+        if [ ! -z ${csName} ]; then
+            CTENV_GVAL_CS_LIST[${#CTENV_GVAL_CS_LIST[@]}]=${csName}
+        else
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                                  "invalid config spec name, ${i}"
+        fi
+    done
+    csList=(${CTENV_GVAL_CS_LIST[@]})
+    CTENV_GVAL_CS_LOCAL_START=${#CTENV_GVAL_CS_LIST[@]}
+
+    if [ -z ${CTENV_UCONF_CONFIG_SPEC_DIR} ] || \
+        [ ! -d ${CTENV_UCONF_CONFIG_SPEC_DIR} ]; then
+        return 0
+    fi
+
+    local csList2=$(ls -l ${CTENV_UCONF_CONFIG_SPEC_DIR}/*.cs 2>/dev/null | tr -s ' ' | cut -d' ' -f9 | sort)
+    j=0
+    i=""
+    local k=""
+    tokens=()
+    for i in ${csList2[@]}; do
+        local csName=`basename ${i} .cs`
+
+        if [ ! -z ${csName} ]; then
+
+            # don't allow the same name existing in global cs pool
+            for k in ${csList[@]}; do
+                if [ ${k} = ${csName} ]; then
+                    ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                        "sorry but the name, ${csName}, in your local cs pool conflicts w/ the name in the pool of ctenv config spec. please rename"
+                    return 1
+                fi
+            done
+
+            CTENV_GVAL_CS_LIST[${#CTENV_GVAL_CS_LIST[@]}]=${csName}
+        fi
+    done
+
+    return 0
+}
+
+# update config spec to have current time stamp
+function ctenv_utils_touch_config_specs
+{
+    local vwTagName=${1:-}
+
+    if [ -z ${vwTagName} ]; then
+        return 0
+    fi
+
+    local tmp_cs=$(ctenv_utils_get_tmp_file)
+    ctenv_utils_add_tmp_file_list ${tmp_cs}
+    cleartool catcs -tag ${vwTagName} >| ${tmp_cs}
+    if [ ! $? -eq 0 ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} "fail to get config spec for ${vwTagName}, stop sync"
+        return 1
+    fi
+
+    local new_cs=$(ctenv_utils_get_tmp_file)
+    ctenv_utils_add_tmp_file_list ${new_cs}
+    grep -v 'load' ${tmp_cs} | \
+        sed "s|^time .*|time `ctenv_utils_get_clearcase_date`|g" > ${new_cs}
+    if [ ! $? -eq 0 ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} "fail to update to latest src base for ${vwTagName}, stop sync"
+        return 1
+    fi
+
+    cleartool setcs -tag ${vwTagName} ${new_cs}
+    if [ ! $? -eq 0 ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} "fail to set config spec for ${vwTagName}, stop sync"
+        return 1
+    fi
+
+    return 0
+}
+
+function ctenv_utils_prt_config_specs
+{
+    local -i i=0
+
+    echo ">> config specs (under ${CTENV_GCONST_PATH_CTENV}/cs)"
+    printf "\tidx: name\n"
+    for (( i=0; i<${CTENV_GVAL_CS_LOCAL_START}; i++)); do
+        if grep ".*${CTENV_GVAL_VIEW_LIST_MASK}.*" <<< ${CTENV_GVAL_CS_LIST[i]} &> /dev/null; then
+            printf "\t%3d: %s\n" $i ${CTENV_GVAL_CS_LIST[i]}
+        fi
+    done
+    echo ""
+
+    if [ ${CTENV_GVAL_CS_LOCAL_START} -eq ${#CTENV_GVAL_CS_LIST[@]} ]; then
+        return 0
+    fi
+
+    echo ">> local config specs (under ${CTENV_UCONF_CONFIG_SPEC_DIR})"
+    printf "\tidx: name\n"
+    for (( ; i<${#CTENV_GVAL_CS_LIST[@]}; i++)); do
+        if grep ".*${CTENV_GVAL_VIEW_LIST_MASK}.*" <<< ${CTENV_GVAL_CS_LIST[i]} &> /dev/null; then
+            printf "\t%3d: %s\n" $i ${CTENV_GVAL_CS_LIST[i]}
+        fi
+    done
+    echo ""
+
+    return 0
+}
+
+export CTENV_GVAL_CLEARCASE_DYN_START=0
+export CTENV_GVAL_CLEARCASE_TAG_LIST=()
+export CTENV_GVAL_CLEARCASE_BRINFO_LIST=()
+export CTENV_GVAL_VIEW_LIST_MASK=""
+export CTENV_GCONST_CLEARCASE_DYN_VIEW_KEYWORD="dynamic_view:"
+export CTENV_GCONST_CLEARCASE_SNAP_VIEW_KEYWORD="snapshot_view:"
+export CTENV_GCONST_CLEARCASE_NO_BRANCH_KEYWORD="NO_BRANCH"
+function ctenv_utils_load_vw_list_file
+{
+    if [ ! -f ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_VW_LIST_FILE} ]; then
+        return 1
+    fi
+
+    local line=""
+    local tokens=()
+    local dynTagList=()
+    local snapTagList=()
+    local dynBrList=()
+    local snapBrList=()
+    while read -r line; do
+        if grep "^${CTENV_GCONST_CLEARCASE_DYN_VIEW_KEYWORD}.*" <<<"$line" &> /dev/null; then
+            IFS=' ' read -a tokens <<< "$line"
+            IFS=':' read -a tokens <<< "${tokens[1]}"
+            dynTagList[${#dynTagList[@]}]=${tokens[0]}
+            if [ -z ${tokens[1]:-} ]; then
+                dynBrList[${#dynTagList[@]}]=${CTENV_GCONST_CLEARCASE_NO_BRANCH_KEYWORD}
+            else
+                dynBrList[${#dynTagList[@]}]=${tokens[1]}
+            fi
+        elif grep "^${CTENV_GCONST_CLEARCASE_SNAP_VIEW_KEYWORD}.*" <<<"$line" &> /dev/null; then
+            IFS=' ' read -a tokens <<< "$line"
+            IFS=':' read -a tokens <<< "${tokens[1]}"
+
+            if [ -d ${CTENV_UCONF_SNAPSHOT_ROOT_DIR}/${tokens[0]} ]; then
+                snapTagList[${#snapTagList[@]}]=${tokens[0]}
+                if [ -z ${tokens[1]:-} ]; then
+                    snapBrList[${#snapTagList[@]}]=${CTENV_GCONST_CLEARCASE_NO_BRANCH_KEYWORD}
+                else
+                    snapBrList[${#snapTagList[@]}]=${tokens[1]}
+                fi
+            else
+                local hostname=`hostname`
+                local hostname2=`ctenv_utils_get_host_name ${tokens[0]}`
+
+                if [ ${hostname} = ${hostname2} ];then
+                    ctenv_utils_prt_warn ${CTENV_GCONST_UTIL} \
+                        "snapshot view, ${tokens[0]}, exists."
+                    ctenv_utils_prt_warn ${CTENV_GCONST_UTIL} \
+                        "however, its dir, ${CTENV_UCONF_SNAPSHOT_ROOT_DIR}/${tokens[0]}, doesn't exist"
+                fi
+            fi
+        fi
+    done < <(cat ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_VW_LIST_FILE})
+
+    CTENV_GVAL_CLEARCASE_DYN_START=${#snapTagList[@]}
+    CTENV_GVAL_CLEARCASE_TAG_LIST=(${snapTagList[@]:-})
+    CTENV_GVAL_CLEARCASE_TAG_LIST+=(${dynTagList[@]:-})
+    CTENV_GVAL_CLEARCASE_BRINFO_LIST=(${snapBrList[@]:-})
+    CTENV_GVAL_CLEARCASE_BRINFO_LIST+=(${dynBrList[@]:-})
+
+    local -i i=0
+    for ((i=0; i<${#CTENV_GVAL_CLEARCASE_BRINFO_LIST[@]}; i++)); do
+        if [ ${CTENV_GVAL_CLEARCASE_BRINFO_LIST[i]} = ${CTENV_GCONST_CLEARCASE_NO_BRANCH_KEYWORD} ]; then
+            CTENV_GVAL_CLEARCASE_BRINFO_LIST[i]=""
+        fi
+    done
+
+    return 0
+}
+
+function ctenv_utils_gen_vw_line_snapshot
+{
+    local tagName=${1:-}
+    local brName=${2:-}
+
+    if [ -z ${tagName} ]; then
+        echo ""
+        return 1
+    else
+        echo ${CTENV_GCONST_CLEARCASE_SNAP_VIEW_KEYWORD} ${tagName}:${brName}
+        return 0
+    fi
+}
+
+function ctenv_utils_gen_vw_line_dynamic
+{
+    local tagName=${1:-}
+    local brName=${2:-}
+
+    if [ -z ${tagName} ]; then
+        echo ""
+        return 1
+    else
+        echo ${CTENV_GCONST_CLEARCASE_DYN_VIEW_KEYWORD} ${tagName}:${brName}
+        return 0
+    fi
+}
+
+function ctenv_utils_save_vw_list_file
+{
+    # remove existing file
+    local listFile=${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_VW_LIST_FILE}
+    rm -f ${listFile}
+
+    # redirect all outputs in the block into ${listFile}
+    {
+        echo "# This is automatically generated by ctenv."
+        echo "# Please don't touch manually."
+        echo "# If any issues, simply remove me. Then, ctenv will re-generate me automatically."
+        echo ""
+        echo "# List of views"
+
+        for (( i=0; i<${CTENV_GVAL_CLEARCASE_DYN_START}; i++)); do
+            if ! ctenv_utils_gen_vw_line_snapshot \
+                 ${CTENV_GVAL_CLEARCASE_TAG_LIST[i]} ${CTENV_GVAL_CLEARCASE_BRINFO_LIST[i]}; then
+                rm -f ${listFile}
+                return 1
+            fi
+        done
+
+        for (( i=$i; i<${#CTENV_GVAL_CLEARCASE_TAG_LIST[@]}; i++)); do
+            if ! ctenv_utils_gen_vw_line_dynamic \
+                 ${CTENV_GVAL_CLEARCASE_TAG_LIST[i]} ${CTENV_GVAL_CLEARCASE_BRINFO_LIST[i]}; then
+                rm -f ${listFile}
+                return 1
+            fi
+        done
+    } >> ${listFile}
+
+    return 0
+}
+
+function ctenv_utils_prt_snap_views
+{
+    local tagIdxList=(${@})
+    local tagList=()
+
+    tagList=(${CTENV_GVAL_CLEARCASE_TAG_LIST[@]})
+
+    if [ ${#tagIdxList[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    echo ">> snapshot views"
+    printf "\tidx: clearcase tag\n"
+    local -i i=0
+    for i in "${tagIdxList[@]}"; do
+        if ctenv_utils_is_snapshot_view $i; then
+            if grep ".*${CTENV_GVAL_VIEW_LIST_MASK}.*" <<< ${tagList[i]} &> /dev/null; then
+                printf "\t%3d: %s\n" $i ${tagList[i]}
+                printf "\t\t%s\n" ${CTENV_UCONF_SNAPSHOT_ROOT_DIR}/${tagList[i]}
+                if [ ! -z ${CTENV_GVAL_CLEARCASE_BRINFO_LIST[i]} ]; then
+                    printf "\t\t branch -> %s\n" ${CTENV_GVAL_CLEARCASE_BRINFO_LIST[i]}
+                fi
+            fi
+        fi
+    done
+
+    echo ""
+    return 0
+}
+
+function ctenv_utils_prt_dyn_views
+{
+    local tagIdxList=(${@})
+    local tagList=()
+
+    tagList=(${CTENV_GVAL_CLEARCASE_TAG_LIST[@]})
+
+    if [ ${#tagIdxList[@]} -eq 0 ]; then
+        #printf "\tNo dynamic views\n\n"
+        return 0
+    fi
+
+    echo ">> dynamic views"
+    printf "\tidx: clearcase tag\n"
+    local i=0
+    for i in "${tagIdxList[@]}"; do
+        if ! ctenv_utils_is_snapshot_view $i; then
+            if grep ".*${CTENV_GVAL_VIEW_LIST_MASK}.*" <<< ${tagList[i]} &> /dev/null; then
+                printf "\t%3d: %s\n" $i ${tagList[i]}
+                if [ ! -z ${CTENV_GVAL_CLEARCASE_BRINFO_LIST[i]} ]; then
+                    printf "\t\t branch -> %s\n" ${CTENV_GVAL_CLEARCASE_BRINFO_LIST[i]}
+                fi
+            fi
+        fi
+    done
+
+    echo ""
+    return 0
+}
+
+function ctenv_utils_load_views_info
+{
+    CTENV_GVAL_CLEARCASE_TAG_LIST=()
+    if ctenv_utils_load_vw_list_file; then
+        return 0
+    fi
+
+    ctenv_utils_prt_info ${CTENV_GCONST_UTIL} "cache file for ctenv doesn't exist. now creating it..."
+    ctenv_utils_prt_info ${CTENV_GCONST_UTIL} "one time only. plz wait"
+
+    local line=""
+    local tokens=()
+    local tagName="THIS_IS_DUMMY_TAG"
+    local isSnapview="FALSE"
+    local dynTagList=()
+    local snapTagList=()
+
+    while read -r line; do
+        if grep "Tag:.*" <<<$line &> /dev/null; then
+            if [ ${isSnapview} == "TRUE" ]; then
+                snapTagList[${#snapTagList[@]}]=${tagName}
+            else
+	            dynTagList[${#dynTagList[@]}]=${tagName}
+            fi
+            IFS=' ' read -a tokens <<< "$line"
+            tagName=${tokens[1]}
+            isSnapview="FALSE"
+        elif grep ".*snapshot.*" <<<$line &> /dev/null; then
+            isSnapview="TRUE"
+        else
+            :
+        fi
+    done < <(cleartool lsview -l "*`ctenv_utils_get_whoami`*")
+
+    # process last line
+    if [ ${isSnapview} == "TRUE" ]; then
+        snapTagList[${#snapTagList[@]}]=${tagName}
+    else
+        dynTagList[${#dynTagList[@]}]=${tagName}
+    fi
+
+    # remove first eleme of dynTagList because it's dummy
+    dynTagList=(${dynTagList[@]:1})
+
+    CTENV_GVAL_CLEARCASE_DYN_START=${#snapTagList[@]}
+    CTENV_GVAL_CLEARCASE_TAG_LIST=(${snapTagList[@]})
+    CTENV_GVAL_CLEARCASE_TAG_LIST+=(${dynTagList[@]})
+    CTENV_GVAL_CLEARCASE_BRINFO_LIST=()
+
+    local -i i=0
+    local tmpFile=`ctenv_utils_get_tmp_file`
+    ctenv_utils_add_tmp_file_list ${tmpFile}
+
+    for ((i=0; i<${#CTENV_GVAL_CLEARCASE_TAG_LIST[@]}; i++)); do
+        if cleartool catcs -tag ${CTENV_GVAL_CLEARCASE_TAG_LIST[i]} >| ${tmpFile}; then
+            CTENV_GVAL_CLEARCASE_BRINFO_LIST[i]=`ctenv_utils_get_branch_name ${tmpFile}`
+        else
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "fail to retrieve view info"
+            return 1
+        fi
+    done
+
+    if ! ctenv_utils_save_vw_list_file; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                              "fail to create the cache file. internal error. please report"
+        return 1
+    fi
+
+    # reload view list not to show snapshot view (not available in this host)
+    if ! ctenv_utils_load_vw_list_file; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+            "fail to retrieve view info. internal error. please report"
+        return 1
+    fi
+
+    ctenv_utils_prt_success ${CTENV_GCONST_UTIL} "the cache file is created successfully"
+
+    return 0
+}
+
+function ctenv_utils_resolve_dot
+{
+    local -r curDir=`pwd -L`
+
+    if [ ! -z ${CLEARCASE_ROOT:-} ]; then
+        if grep "^/vobs.*" <<<${curDir} &> /dev/null; then
+            basename ${CLEARCASE_ROOT}
+            return 0
+        fi
+    fi
+
+    if [ ! -d ${CTENV_UCONF_SNAPSHOT_ROOT_DIR:-} ]; then
+        return 1
+    fi
+
+    local diffDir=""
+    while true; do
+        diffDir=${curDir#${CTENV_UCONF_SNAPSHOT_ROOT_DIR:-}/}
+        if [ ${diffDir} != ${curDir} ]; then
+            break
+        fi
+
+        diffDir=${curDir#${CTENV_UCONF_DYNVIEW_ROOT_DIR:-}/}
+        if [ ${diffDir} != ${curDir} ]; then
+            break
+        fi
+
+        return 1
+    done
+
+    diffDir=${diffDir%%/*}
+    if [ -z ${diffDir} ]; then
+        return 1
+    else
+        echo ${diffDir}
+        return 0
+    fi
+}
+
+function ctenv_utils_convert_to_tag_idx
+{
+    local param=$1
+    local -i i=0
+    local -i len=0
+    local list=()
+    local retval=()
+
+    list=(${CTENV_GVAL_CLEARCASE_TAG_LIST[@]})
+    len=${#list[@]}
+
+    if ctenv_utils_is_number ${param}; then
+        if [ ${param} -ge ${len} ]; then
+            :
+        else
+            echo ${param}
+            return 0
+        fi
+    fi
+
+    # resolving any '.'s
+    if [ "${param}" = "." ]; then
+        param=`ctenv_utils_resolve_dot`
+        if [ -z ${param:-} ]; then
+            return 1
+        fi
+    fi
+
+    for (( i=0; i<len; i++)); do
+        if grep ".*${param}.*" <<<${list[i]} &> /dev/null; then
+            retval[${#retval[@]}]=$i
+        fi
+    done
+
+    if [ ! ${#retval[@]} -eq 0 ]; then
+        echo ${retval[@]}
+    fi
+
+    return 0
+}
+
+function ctenv_utils_convert_to_tag_idxs
+{
+    local params=($@)
+
+    local -i retval=()
+    local -i idxList=()
+    local -i len=${#params[@]}
+    local -i i=0
+
+    for (( i=0; i<len; i++)); do
+        # name-to-tag_idx mapping is required
+        idxList=(`ctenv_utils_convert_to_tag_idx ${params[i]}`)
+        if [ ${#idxList[@]} -gt 0 ]; then
+            retval+=(${idxList[@]})
+        else
+            return 1
+        fi
+    done
+
+    # remove duplicated items
+    retval=(`echo ${retval[@]} | tr ' ' '\n' | sort | uniq`)
+
+    if [ ! ${#retval[@]} -eq 0 ]; then
+        echo ${retval[@]}
+    fi
+
+    return 0
+}
+
+function ctenv_utils_delete_ccfile
+{
+    local vwTagName=${1:-}
+
+    if [ -z ${vwTagName} ]; then
+        return 1
+    fi
+
+    \rm -f ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_CC_LIST_DIR}/${vwTagName}.${CTENV_GCONST_CC_LIST_FILE_EXT}
+    return $?
+}
+
+function ctenv_utils_touch_ccfile
+{
+    local vwTagName=${1:-}
+
+    if [ -z ${vwTagName} ]; then
+        return 1
+    fi
+
+    touch ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_CC_LIST_DIR}/${vwTagName}.${CTENV_GCONST_CC_LIST_FILE_EXT}
+    return $?
+}
+
+function ctenv_utils_get_cc_list_file
+{
+    local vwTagIdx=${1:-}
+
+    if [ -z ${vwTagIdx} ]; then
+        return 1
+    fi
+
+    local vwTagName=${CTENV_GVAL_CLEARCASE_TAG_LIST[${vwTagIdx}]}
+    local rootPath=""
+    if ctenv_utils_is_snapshot_view ${vwTagIdx}; then
+        rootPath="${CTENV_UCONF_SNAPSHOT_ROOT_DIR}/${vwTagName}/${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT}"
+    else
+        # for dynamic view
+        if [ -z ${CLEARCASE_ROOT:-} ]; then
+            rootPath=${CTENV_UCONF_DYNVIEW_ROOT_DIR}/${vwTagName}/${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT}
+        else
+            rootPath=/${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT}
+        fi
+    fi
+    
+    local ccFile=`ctenv_utils_readlink "${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_CC_LIST_DIR}/${vwTagName}.${CTENV_GCONST_CC_LIST_FILE_EXT}"`
+    if [ -z ${ccFile} ]; then
+        ccFile="${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_CC_LIST_DIR}/${vwTagName}.${CTENV_GCONST_CC_LIST_FILE_EXT}"
+        touch "${ccFile}"
+        pushd ${rootPath} &> /dev/null
+
+        local -a chkoutFileList=(`cleartool lsco -me -r -cvi -s`)
+
+        local file=""
+        local -a tokens=()
+        local i=""
+        [ ! ${#chkoutFileList[@]} -eq 0 ] && for i in "${chkoutFileList[@]}"; do
+            IFS=":" read -a tokens <<<"$(cleartool desc -pred ${i} | grep "predecessor version:"| tr -d ' ')"
+
+            file=`ctenv_utils_get_fn_for_cc ${vwTagIdx} ${i}`
+            echo "${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT}/${file#./}@@${tokens[1]}" >> ${ccFile}
+        done
+
+        popd &> /dev/null
+    fi
+
+    echo "${ccFile}"
+    return 0
+}
+
+function ctenv_utils_get_cc_matches
+{
+    local vwTagIdx=${1:-}
+    local elem=${2:-}
+
+    if [ -z ${vwTagIdx} ]; then
+        return 1
+    fi
+    if [ -z ${elem} ]; then
+        return 1
+    fi
+
+    # get a list of my checked-out files in a current view
+    local ccListFile=`ctenv_utils_get_cc_list_file ${vwTagIdx}`
+    local -a chkoutFileList=(`cat ${ccListFile}`)
+    if [ ${#chkoutFileList[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    local i=""
+    local -a matches=()
+    local viewRootDir=`ctenv_utils_get_root_path ${vwTagIdx}`
+    for i in "${chkoutFileList[@]}"; do
+        i=${i%@@*}
+
+        #if [[ ${viewRootDir}${i} =~ "${elem}.*" ]]; then
+        if  grep "${elem}.*" <<<"${viewRootDir}${i}" &> /dev/null; then
+            matches=(${matches[@]} ${i})
+        fi
+    done
+
+    echo ${matches[@]}
+    return 0
+}
+
+function ctenv_utils_get_rel_path
+{
+    local idx=${1:-}
+
+    if [ -z ${idx} ]; then
+        return 1
+    fi
+
+    local tgtPath=""
+    if [ -z ${2:-} ]; then
+        tgtPath=`pwd -P`
+    elif [ -d ${2} ]; then
+        pushd ${2} &> /dev/null
+        tgtPath=`pwd -P`
+        popd &> /dev/null
+    else
+        return 1
+    fi
+
+    if [ ${tgtPath} != "/" ]; then
+        local vwTagName=${CTENV_GVAL_CLEARCASE_TAG_LIST[${idx}]}
+        local prePath=${CTENV_UCONF_DYNVIEW_ROOT_DIR}/${vwTagName}
+
+        if [ -z ${CLEARCASE_ROOT:-} ] || \
+               [ ${CLEARCASE_ROOT} != ${prePath} ]; then
+            tgtPath=${tgtPath#${prePath}/}
+        else
+            if [ ${tgtPath#${prePath}} = ${tgtPath} ];then
+                tgtPath=${tgtPath#/}
+            else
+                tgtPath=${tgtPath#${prePath}/}
+            fi
+        fi
+    fi
+
+    echo ${tgtPath}
+    return 0
+}
+
+# the path from this + get_fn_for_cc == absolute path
+# note that the path ends with '/'
+function ctenv_utils_get_root_path
+{
+    local idx=${1:-}
+
+    if [ -z ${idx} ]; then
+        return 1
+    fi
+
+    local vwTagName=${CTENV_GVAL_CLEARCASE_TAG_LIST[${idx}]}
+    local prePath=${CTENV_UCONF_DYNVIEW_ROOT_DIR}/${vwTagName}
+
+    local rootPath=""
+    if ctenv_utils_is_snapshot_view ${idx}; then
+        rootPath="${CTENV_UCONF_SNAPSHOT_ROOT_DIR}/${vwTagName}/"
+    elif [ -z ${CLEARCASE_ROOT:-} ] || \
+        [ ${CLEARCASE_ROOT} != ${prePath} ]; then
+        rootPath="${prePath}/"
+    else
+        rootPath="/"
+    fi
+
+    echo ${rootPath}
+    return 0
+}
+
+function ctenv_utils_get_fn_for_cc
+{
+    local vwTagIdx=${1:-}
+    local file=${2:-} # absolute path is assumed
+
+    if [ -z ${file} ]; then
+        return 1
+    fi
+
+    if [ ! -f ${file} ] && [ ! -d ${file} ]; then
+        return 1
+    fi
+
+    local vwTagName=${CTENV_GVAL_CLEARCASE_TAG_LIST[${vwTagIdx}]}
+    local prePath=${CTENV_UCONF_DYNVIEW_ROOT_DIR}/${vwTagName}
+
+    if [ -z ${CLEARCASE_ROOT:-} ] || \
+        [ ${CLEARCASE_ROOT} != ${prePath} ]; then
+        file=${file#${prePath}/}
+    else
+        file=${file#/}
+    fi
+
+    echo ${file}
+    return 0
+}
+
+function ctenv_utils_get_pred_list
+{
+    local tagIdx=${1:-}
+    local viewRoot=`ctenv_utils_get_root_path ${tagIdx}`
+    local ccListFile=`ctenv_utils_get_cc_list_file ${tagIdx}`
+    shift
+    local -a diffFileList=("$@")
+    local -a predFileList=()
+
+    pushd  ${viewRoot} &> /dev/null
+    local -i j=0
+    for (( j=0; j<${#diffFileList[@]}; j++)); do
+        # get a predecessor's information
+        predFileList[j]=$(grep "${diffFileList[j]}" ${ccListFile})
+        if [ -z ${predFileList[j]} ]; then
+            local -a tokens=()
+            IFS=': ' read -a tokens <<<"$(cleartool desc "${diffFileList[j]}" | grep predecessor)"
+            predFileList[j]=${diffFileList[j]}@@${tokens[2]}
+        fi
+    done
+    popd &> /dev/null
+
+    echo "${predFileList[@]}"
+    return 0
+}
+
+function ctenv_utils_get_parent_list
+{
+    local -i ago=${1:-0}
+    shift
+    local -a predFileList=("$@")
+    local -i j=0
+    local -a fileList=()
+
+    local -i ver=0
+    for (( j=0; j<${#predFileList[@]}; j++)); do
+        fileList[j]="${predFileList[j]%/*}"
+        ver="${predFileList[j]##*/}"
+
+        ver=${ver}-${ago}
+        if [ ${ver} -le 0 ]; then
+            ver=0
+        fi
+
+        fileList[j]="${fileList[j]}/${ver}"
+    done
+
+    echo "${fileList[@]}"
+    return 0
+}
+
+function ctenv_utils_get_ancestor_list
+{
+    local -a predFileList=("$@")
+    local -i j=0
+    local -a fileList=()
+
+    for (( j=0; j<${#predFileList[@]}; j++)); do
+        fileList[j]="${predFileList[j]%/*}/0"
+    done
+
+    echo "${fileList[@]}"
+    return 0
+}
+
+
+function ctenv_utils_get_changed_files_in_branch
+{
+    local tagIdx="${1:-}"
+    if [ -z ${tagIdx} ]; then
+        echo ""
+        return 1
+    fi
+
+    local viewRoot=`ctenv_utils_get_root_path ${tagIdx}`
+    if [ -z ${viewRoot} ]; then
+        echo ""
+        return 1
+    fi
+
+    pushd ${viewRoot}/${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT} >& /dev/null
+
+    local branch=${CTENV_GVAL_CLEARCASE_BRINFO_LIST[${tagIdx}]}
+    #local -a fileList=$(cleartool find . -type f -user `whoami` -version "brtype(${branch})" -print)
+    #local -a fileList=$(cleartool find . -type f -version "brtype(${branch})" -print)
+    local -a fileList=$(cleartool find . -type f -branch "brtype(${branch})" -print)
+
+    local -i j=0
+    fileList=(`echo ${fileList[@]}`)
+    for (( j=0; j<${#fileList[@]}; j++)); do
+        fileList[j]="${fileList[j]%%@@*}" # remove @@* part
+        fileList[j]="${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT}/${fileList[j]:2}" # remove ./
+    done
+
+    popd >& /dev/null
+
+    echo "${fileList[@]}" | tr -s [:space:] '\n' | sort -u
+    return 0
+}
+
+function ctenv_utils_get_latest_list
+{
+    local -a predFileList=("$@")
+    local -i j=0
+    local -a latestFileList=()
+
+    for (( j=0; j<${#predFileList[@]}; j++)); do
+        latestFileList[j]="${predFileList[j]%/*}/LATEST"
+    done
+
+    echo "${latestFileList[@]}"
+    return 0
+}
+
+function ctenv_utils_remove_check_outs_int
+{
+    local vwTagIdx=${1:-}
+    local listFile=${2:-}
+    shift; shift
+    local -a files=($@)
+
+    if [ ${#files} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+            "no files to be reverted"
+        return 0
+    fi
+
+    if [ -z ${listFile} ] || [ ! -f ${listFile} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+            "internal error at listFile in ctenv_utils_revert_check_out. please report"
+        return 1
+    fi
+
+    local fileName=""
+    local i=""
+    local -a ccFileList=()
+    for i in "${files[@]}"; do
+        if [ ! -f ${i} ] && [ ! -d ${i} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "given file/dir, ${i}, doesn't exist. stop revert"
+            return 1
+        fi
+
+        local fileName=`ctenv_utils_get_fn_for_cc ${vwTagIdx} ${i}`
+        if [ -z ${fileName} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "internal error at fileName in ctenv_utils_revert_check_out. please report"
+            return 1
+        fi
+
+        if ! grep ${fileName} ${listFile} &> /dev/null; then
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "given file, ${fileName}, is not checked out. so, cannot be reverted"
+            return 1
+        fi
+
+        ccFileList[${#ccFileList[@]}]=${fileName}
+    done
+
+    local -i j=0
+    local tokens=()
+    local token=""
+    ctenv_utils_prt_info ${CTENV_GCONST_UTIL} "files are being reverted"
+    for (( j=0; j<${#ccFileList[@]}; j++)); do
+
+        if cleartool unco -rm ${files[j]}; then
+
+            # check whether added file  or not
+            IFS=" " read -a tokens <<<"`grep ${ccFileList[j]} ${listFile}`"
+            token=${tokens[0]}
+            if [ ${tokens##*/} -eq 0 ]; then
+                cleartool rm ${files[j]} >& /dev/null
+            fi
+
+            # remove entry from cc file
+            local tmpFile=`ctenv_utils_get_tmp_file`
+            ctenv_utils_add_tmp_file_list ${tmpFile}
+
+            grep -v "${ccFileList[j]}@@" ${listFile} >| ${tmpFile}
+            \cp -f ${tmpFile} ${listFile}
+
+            ctenv_utils_prt_success ${CTENV_GCONST_UTIL} \
+                "a given file, ${files[j]}, is reverted"
+        else
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "error when removing given files"
+        fi
+    done
+    ctenv_utils_prt_info ${CTENV_GCONST_UTIL} "revert complete"
+
+    return 0
+}
+
+function ctenv_utils_check_in_files_int
+{
+    local vwTagIdx=${1:-}
+    local listFile=${2:-}
+    shift; shift
+    local -a files=($@)
+
+    if [ ${#files} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+            "no files can be checked-in"
+        return 0
+    fi
+
+    if [ -z ${listFile} ] || [ ! -f ${listFile} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+            "internal error at listFile in ctenv_utils_check_in_files_int. please report"
+        return 1
+    fi
+
+    if [ ${listFile:0:1} = "/" ]; then
+        :
+    else
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+            "internal error. listFile, ${listFile}, should start w/ '/' in ctenv_utils_check_in_files_int. please report"
+        return 1
+    fi
+
+    local viewRoot=`ctenv_utils_get_root_path ${vwTagIdx}`
+    local fileName=""
+    local i=""
+    local -a ccFileList=()
+    local -a sameFileList=()
+    for i in "${files[@]}"; do
+        if [ ! -f ${i} ] && [ ! -d ${i} ] ; then
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "given file/dir, ${i}, doesn't exist. stop check-in"
+            return 1
+        fi
+
+        if [ ${i:0:1} = "/" ]; then
+            if cleartool diff -pred ${i} >& /dev/null; then
+                sameFileList[${#sameFileList[@]}]=${i#${viewRoot}}
+                ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+                                     "no changes in ${i#${viewRoot}}. skip check-in"
+            else
+                ccFileList[${#ccFileList[@]}]=${i}
+            fi
+        else
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "all files should be given by absolute path. stop check-in"
+            return 1
+        fi
+    done
+
+    if [ ${#ccFileList[@]} -eq 0 ]; then
+        ctenv_utils_prt_success ${CTENV_GCONST_UTIL} \
+                                "no files need to be checked-in"
+        return 0
+    fi
+
+    # get checkin mesg
+    local ciMesg=""
+    while [ 1 ]; do
+        printf "for this checkin, input your comment (e.g., bug # ...): "
+        read ciMesg
+        echo ""
+
+        printf "your comment: ${ciMesg}\n"
+        if ctenv_utils_confirm_usr_decision "is it correct?" ; then
+            break
+        fi
+    done
+
+    ctenv_utils_prt_info ${CTENV_GCONST_UTIL} "start checking in"
+
+    local tmpFile=`ctenv_utils_get_tmp_file`
+
+    if cleartool ci -c "${ciMesg}" ${ccFileList[@]}; then
+        ctenv_utils_add_tmp_file_list ${tmpFile}
+        for i in "${ccFileList[@]}"; do
+            grep -v "${i#${viewRoot}}@@" ${listFile} >| ${tmpFile}
+            \cp -f ${tmpFile} ${listFile}
+        done
+    else
+        rm -f ${listFile}
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+            "error when check-in given files"
+        ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+            "internal cache file is purged"
+        return 1
+    fi
+
+    if [ ${#sameFileList[@]} -ne 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+                             "list of skipped files"
+        for i in "${sameFileList[@]}"; do
+            printf "\t%s\n" "${i}"
+        done
+    fi
+
+    ctenv_utils_prt_success ${CTENV_GCONST_UTIL} "given files have been checked-in"
+
+    return 0
+}
+
+function ctenv_utils_check_out_files_int
+{
+    local vwTagIdx=${1:-}
+    local listFile=${2:-}
+    shift; shift
+    local -a files=($@)
+
+    if [ ${#files} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+            "no files to be checked out"
+        return 0
+    fi
+
+    if [ -z ${listFile} ] || [ ! -f ${listFile} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+            "internal error at listFile in ctenv_utils_check_out_file. please report"
+        return 1
+    fi
+
+    local fileName=""
+    local i=""
+    local -a fileList=()
+    local -a ccFileList=()
+    for i in "${files[@]}"; do
+        if [ ! -f ${i%@@*} ] && [ ! -d ${i%@@*} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "given file/dir, ${i}, doesn't exist. stop check-out"
+            return 1
+        fi
+
+        fileName=`ctenv_utils_get_fn_for_cc ${vwTagIdx} ${i}`
+        if [ -z ${fileName} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "internal error at fileName in ctenv_utils_check_out_file. please report"
+            return 1
+        fi
+
+        if grep "${fileName%@@*}@@" ${listFile} &> /dev/null; then
+            ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+                "given file/dir, ${fileName}, is already checked out"
+        else
+            fileList[${#fileList[@]}]=${i}
+            ccFileList[${#ccFileList[@]}]=${fileName%@@*}
+        fi
+    done
+
+    if [ ${#fileList[@]} -eq 0 ]; then
+        ctenv_utils_prt_success ${CTENV_GCONST_UTIL} "no files need to be checked out"
+        return 0
+    fi
+
+    local predFile=""
+    local -i j=0
+
+    ctenv_utils_prt_info ${CTENV_GCONST_UTIL} "files are being checked out"
+
+    for (( j=0; j<${#fileList[@]}; j++)); do
+
+        local ctCmd=""
+        if [ ${fileList[j]} = ${fileList[j]@@*} ]; then
+            ctCmd="cleartool co -unr -nc ${fileList[j]}"
+        else
+            ctCmd="cleartool co -unr -nc -version ${fileList[j]}"
+        fi
+
+        if eval ${ctCmd}; then
+            IFS=":" read -a tokens <<<"$(cleartool desc -pred ${fileList[j]} | grep 'predecessor version:' | tr -d ' ')"
+            predFile="${ccFileList[j]}@@${tokens[1]}"
+            echo ${predFile} >> ${listFile}
+
+            ctenv_utils_prt_success ${CTENV_GCONST_UTIL} \
+                "given file, ${fileList[j]}, is checked out"
+        else
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "error when checking out a given file, ${fileList[j]}"
+        fi
+    done
+
+    ctenv_utils_prt_info ${CTENV_GCONST_UTIL} "check-out complete"
+
+    return 0
+}
+
+function ctenv_utils_add_files_int
+{
+    local vwTagIdx=${1:-}
+    local listFile=${2:-}
+    shift; shift
+    local -a files=($@)
+
+    if [ ${#files} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+            "no files to be added"
+        return 0
+    fi
+
+    if [ -z ${listFile} ] || [ ! -f ${listFile} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+            "internal error at listFile in ctenv_utils_add_files_int. please report"
+        return 1
+    fi
+
+    local fileName=""
+    local i=""
+    local -a fileList=()
+    local -a ccFileList=()
+    for i in "${files[@]}"; do
+        fileName=`ctenv_utils_get_fn_for_cc ${vwTagIdx} ${i}`
+        if [ -z ${fileName} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "internal error at fileName in ctenv_utils_add_files_int. please report"
+            return 1
+        fi
+
+        if grep "${fileName}@@" ${listFile} &> /dev/null; then
+            ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+                "given file, ${fileName}, is already checked out for adding"
+        else
+            local dir="$(dirname ${fileName})"
+
+            if ! grep "${dir}@@" ${listFile} &> /dev/null; then
+                ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+                                     "dir, ${dir}, is not checked out to add ${i}. please check the dir first"
+                return 1
+            fi
+
+            fileList[${#fileList[@]}]=${i}
+            ccFileList[${#ccFileList[@]}]=${fileName}
+        fi
+    done
+
+    if [ ${#fileList[@]} -eq 0 ]; then
+        ctenv_utils_prt_success ${CTENV_GCONST_UTIL} "no files need to be added"
+        return 0
+    fi
+
+    local predFile=""
+    local -i j=0
+
+    ctenv_utils_prt_info ${CTENV_GCONST_UTIL} "files are being checked out for add"
+
+    for (( j=0; j<${#fileList[@]}; j++)); do
+        if rm -f ${fileList[j]} && cleartool mkelem -nc ${fileList[j]}; then
+            :
+        else
+            if ctenv_utils_confirm_usr_decision "Error due to duplicated file? (meaning twin evil) "; then
+                touch ${fileList[j]}
+            else
+                ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                                      "error when adding a given file, ${files[j]}"
+                ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                                      "do \"cleartool rmelem -nc ${fileList[j]}\" if required"
+                return 1
+            fi
+        fi
+
+        IFS=":" read -a tokens <<<"$(cleartool desc -pred ${files[j]} | grep 'predecessor version:' | tr -d ' ')"
+        predFile="${ccFileList[j]}@@${tokens[1]}"
+        echo ${predFile} >> ${listFile}
+
+        ctenv_utils_prt_success ${CTENV_GCONST_UTIL} \
+                                "given file, ${files[j]}, is checked out for add"
+    done
+
+    ctenv_utils_prt_info ${CTENV_GCONST_UTIL} "check-out for add complete"
+
+    return 0
+}
+
+function ctenv_utils_sync_files_int
+{
+    local vwTagIdx=${1:-}
+    local listFile=${2:-}
+    shift; shift
+    local -a files=($@)
+
+    if [ ${#files} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+            "no files need to be synced"
+        return 0
+    fi
+
+    if [ -z ${listFile} ] || [ ! -f ${listFile} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+            "internal error at listFile in ctenv_utils_sync_files_int. please report."
+        return 1
+    fi
+
+    local rootPath=`ctenv_utils_get_root_path ${vwTagIdx}`
+    if [ -z ${rootPath:-} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+            "internal error at rootPath in ctenv_utils_sync_files_int. please report."
+        return 1
+    fi
+
+    local relPath=`ctenv_utils_get_rel_path ${vwTagIdx}`
+    if [ -z ${relPath:-} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+            "internal error at relPath in ctenv_utils_sync_files_int. please report."
+        return 1
+    fi
+
+    local fileName=""
+    local fileNameVer=""
+    local i=""
+    local -a syncFiles=()
+    for i in "${files[@]}"; do
+        if [ ! -f ${i%@@*} ] && [ ! -d ${i%@@*} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "given file, ${i}, doesn't exist. stop syncing"
+            return 1
+        fi
+
+        fileName=`ctenv_utils_get_fn_for_cc ${vwTagIdx} ${i}`
+        if [ -z ${fileName} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                "internal error at fileName in ctenv_utils_check_out_file. please report"
+            return 1
+        fi
+
+        fileNameVer=(`grep ${fileName%@@*} ${listFile}`)
+        if [ ! -z ${fileNameVer[0]} ]; then
+            syncFiles[${#syncFiles[@]}]=${rootPath}${fileNameVer[0]}
+        else
+            ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+                "given file, ${fileName}, is not checked out. so no need to be synced"
+        fi
+    done
+
+    local -a mergeFiles=()
+    local -a conflict=()
+    local myFile=""
+    local latest=""
+    local pred=""
+    for i in "${syncFiles[@]}"; do
+        myFile=${i%@@*}
+        pred=${i}
+        latest="${i%/*}/LATEST"
+
+        if [ -d ${myFile} ]; then
+            ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+                "not syncing dir, ${myFile}"
+            continue
+        fi
+
+        # ctenv_utils_three_way_merge return 1 only w/ conflict
+        if ! ctenv_utils_three_way_merge ${myFile} ${pred} ${latest}; then
+            conflict[${#conflict[@]}]=${myFile}
+        fi
+
+        mergeFiles[${#mergeFiles[@]}]=${myFile}
+    done
+
+    local tmpPath=""
+    if [ ${#mergeFiles[@]} -gt 0 ]; then
+        local -a mergeList=$(cleartool findmerge ${mergeFiles[@]} -flatest \
+            -log NUL -print -short | awk '{print $2}')
+
+        for i in ${mergeList[@]}; do
+            cleartool merge -abort -to ${i%@@*} ${i}
+        done
+
+        ctenv_utils_prt_info ${CTENV_GCONST_UTIL} "all files are up-to-date"
+        for i in ${mergeList[@]}; do
+            tmpPath=${i%@@*}
+            tmpPath=${tmpPath#${rootPath}${relPath}/}
+            printf "\t%s\n" ${tmpPath}
+        done
+    fi
+
+    if [ ${#conflict[@]} -gt 0 ]; then
+       ctenv_utils_prt_info ${CTENV_GCONST_UTIL} "files with conflict:"
+        for i in "${conflict[@]}"; do
+            tmpPath=${tmpPath#${rootPath}${relPath}/}
+            printf "\t%s\n" ${tmpPath}
+        done
+        ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+                             "don't forget to resolve the conflict manually"
+    fi
+
+    return 0
+}
+
+function ctenv_utils_process_files
+{
+    local process=${1:-}
+    shift
+
+    local coFiles=()
+    for i in "$@"; do
+        if [ -f ${i} ] || [ -d ${i} ]; then
+            coFiles[${#coFiles[@]}]=`ctenv_utils_readlink ${i}`
+        else
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} "given file, ${i}, doesn't exist"
+            return 1
+        fi
+    done
+
+    if [ ${#coFiles[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    ctenv_utils_load_views_info
+    local tagIdxArray=(`ctenv_utils_convert_to_tag_idxs '.'`)
+    if [ ${#tagIdxArray[@]} -eq 0 ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} "not under a view."
+        return 1
+    fi
+
+    local listFile=`ctenv_utils_get_cc_list_file ${tagIdxArray[0]}`
+    if [ -z ${listFile} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} "internal error at listFile in ctenv_utils_revert_check_out. please report"
+        return 1
+    fi
+
+    eval "${process} ${tagIdxArray[0]} ${listFile} ${coFiles[@]}"
+
+    return $?
+}
+
+function ctenv_utils_parse_get_views
+{
+    local -a views=($@)
+
+    if [ ${#views[@]} -eq 0 ]; then
+        echo ""
+        return 0
+    fi
+
+    local vwName=""
+    local -i i=0
+    local -i len=${#views[@]}
+    for (( i=0; i<len; i++)); do
+        vwName=${views[i]}
+        if [ "${vwName}" = "." ]; then
+            vwName="`ctenv_utils_resolve_dot`"
+            if [ -z ${vwName:-} ]; then
+                ctenv_utils_prt_error ${CTENV_GCONST_UTIL} \
+                                      "internal error while resolving dot. please report"
+                return 1
+            else
+                if ! ctenv_utils_is_view_name ${vwName}; then
+                    vwName=${vwName%_*} # remove build opt
+                    vwName=${vwName%_*} # remove system type
+                fi
+            fi
+        fi
+        views[i]=${vwName}
+    done
+
+    # load tags
+    if [ ${#CTENV_GVAL_CLEARCASE_TAG_LIST[@]} -eq 0 ]; then
+        ctenv_utils_load_views_info
+    fi
+
+    local -a tagIdxArray=(`ctenv_utils_convert_to_tag_idxs "${views[@]}"`)
+    if [ ${#tagIdxArray[@]} -eq 0 ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_UTIL} "given views, \"${views[@]}\", are invalid. check them again"
+        return 1
+    fi
+
+    # sanity check
+    local vwRootPath=""
+    local vwTagName=""
+    local -i i=0
+    len=${#tagIdxArray[@]}
+    for (( i=0; i<len; i++)); do
+        vwTagName=${CTENV_GVAL_CLEARCASE_TAG_LIST[${tagIdxArray[i]}]}
+        vwName=`ctenv_utils_get_vw_name ${vwTagName}`
+
+        if ! ctenv_utils_is_snapshot_view ${tagIdxArray[i]} && \
+                ! cleartool startview ${vwTagName}; then
+            ctenv_utils_prt_error ${CTENV_GCONST_UTIL} "given views, \"${views[@]}\", are invalid. check them again"
+            return 1
+        fi
+    done
+
+    echo ${tagIdxArray[@]}
+    return 0
+}
+
+function ctenv_utils_process_views
+{
+    local process=${1:-}
+    shift
+    local -a views=($@)
+
+    if [ -z ${process} ]; then
+        return 1
+    fi
+
+    # load tags
+    ctenv_utils_load_views_info
+
+    tagIdxArray=(`ctenv_utils_parse_get_views ${views[@]}`)
+    if [ $? -eq 0 ]; then
+        if [ ! ${#views[@]} -eq ${#tagIdxArray[@]} ]; then
+            ctenv_utils_prt_warn ${CTENV_GCONST_UTIL} \
+                                 "multiple matches are found:"
+            local i=""
+            for i in ${tagIdxArray[@]}; do
+                printf "\t${i}: ${CTENV_GVAL_CLEARCASE_TAG_LIST[${i}]}\n"
+            done
+
+            echo ""
+            if ! ctenv_utils_confirm_usr_decision "ok to proceed for all of them? "; then
+                ctenv_utils_prt_info ${CTENV_GCONST_UTIL} \
+                                     "stopped"
+                return 1
+            fi
+        fi
+    else
+        return 1
+    fi
+
+    local -i i=0
+    len=${#tagIdxArray[@]}
+    for (( i=0; i<len; i++)); do
+        if eval "${process} ${tagIdxArray[i]}"; then
+            :
+        else
+            return 1
+        fi
+	 done
+
+    return 0
+}
+
+function ctenv_utils_tbz_to_selfext
+{
+    local tbz=${1:-}
+    local selfext=${2:-}
+
+    if [ -z "${selfext}" ]; then
+       ctenv_utils_prt_error \
+            "not enough parameters"
+	    return 1
+    fi
+
+    if [ ! -f "${tbz}" ]; then
+       ctenv_utils_prt_error \
+            "a given tbz file, ${tbz}, doesn't exist"
+	    return 1
+    fi
+
+    if [ -f "${selfext}" ]; then
+       ctenv_utils_prt_error \
+            "file, ${selfext}, already exists"
+	    return 1
+    fi
+
+    local selfextTemplate=${CTENV_GCONST_PATH_DAT}/${CTENV_GCONST_SELFEXT_FILE}
+    if [ ! -f ${selfextTemplate} ]; then
+       ctenv_utils_prt_error \
+            "internal error. cannot find template selfext file in CTENV"
+	    return 1
+    fi
+
+    cp -f ${selfextTemplate} ${selfext}
+    {
+        echo "__CTENV_TAR_ARCHIVE_START__"
+        cat ${tbz}
+    } >> ${selfext}
+
+    return 0
+}
+
+trap ctenv_utils_exit INT TERM EXIT

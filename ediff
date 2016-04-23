@@ -1,0 +1,85 @@
+#!/bin/bash
+# -------------------------------------------------------------------------
+# ediff: wrapper for emacs ediff
+#
+# Copyright 2016 by Yonghyun Hwang <freeaion@gmail.com>
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# Some rights reserved.
+# -------------------------------------------------------------------------
+
+EDIFF_GCONST_VERSION="1.0"
+
+# print usage
+function ediff_prt_cmd_heading
+{
+    echo "======================"
+    echo "ediff: wrapper for emacs ediff $1"
+    echo "       email to freeaion@gmail.com for supports"
+    echo ""
+}
+
+function ediff_prt_usage
+{
+    ediff_prt_cmd_heading ${EDIFF_GCONST_VERSION}
+    echo 1>&2 Usage: ediff "[FILE_1|DIR_1] [FILE_2|DIR_2] [FILE_3]"
+    echo " + key bindings while diffing:"
+    echo "       \"n\"            : jump to next diff"
+    echo "       \"p\"            : jump to previous diff"
+    echo "       \"?\"            : get online help for diffing"
+    echo "       \"ctrl-x ctrl-o\": switch among source & diff frames"
+    echo "       \"ctrl-x ctrl-c\": exit"
+    echo ""
+    echo " + examples:"
+    echo "    1) diff two files (2-way diff)"
+    echo "       > ediff file1 file2"
+    echo ""
+    echo "    2) diff two dirs"
+    echo "       > ediff dir1 dir2"
+    echo ""
+    echo "    3) diff three files (3-way diff)"
+    echo "       > ediff file1 file2 file3"
+    echo ""
+}
+
+##############################################
+# Main script starts from here!
+if ! which emacs >& /dev/null; then
+    echo "cannot find emacs. stop here."
+    exit 1
+fi
+
+if [ -z ${2:-} ]; then
+    ediff_prt_usage
+    exit 0
+fi
+
+if [ -f ${1:-} -a -f ${2:-} ] || [ -d ${1:-} -a -d ${2:-} ]; then
+    :
+else
+    printf "${0##*/}[error]: all params should be either files or dirs\n"
+    exit 1
+fi
+
+quoted1=${1//\\/\\\\}; quoted1=${quoted1//\"/\\\"}
+quoted2=${2//\\/\\\\}; quoted2=${quoted2//\"/\\\"}
+
+if [ -z ${3:-} ]; then
+    if [ -z ${CTENV_GCONST_PATH_CTENV} ]; then
+        emacs -Q -nw --eval "(ediff \"$quoted1\" \"$quoted2\")"
+    else
+        emacs -q --load ${CTENV_GCONST_PATH_CTENV}/dat/emacs.el -nw --eval "(ediff \"$quoted1\" \"$quoted2\")"
+    fi
+else
+    quoted3=${3//\\/\\\\}; quoted3=${quoted3//\"/\\\"}
+    if [ -z ${CTENV_GCONST_PATH_CTENV} ]; then
+        emacs -Q -nw --eval "(ediff-files3 \"$quoted1\" \"$quoted2\" \"$quoted3\")"
+    else
+        emacs -q --load ${CTENV_GCONST_PATH_CTENV}/dat/emacs.el -nw --eval "(ediff-files3 \"$quoted1\" \"$quoted2\" \"$quoted3\")"
+    fi
+fi
+
+exit $?

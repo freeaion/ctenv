@@ -1,0 +1,274 @@
+#+OPTIONS: \n:t f:nil
+
+* Introduction
+  CTENV is a smart tool-set to dramatically simplify your daily tasks
+  for clearcase view management. To streamline the daily tasks and
+  minimize any burdens with clearcase, CTENV provides super intuitive
+  command line interface. For now, CTENV is optimized to provide the
+  best support for single stream repository.
+
+* Prerequisite
+  CTENV is actively tested on Linux box. However, CTENV is expected to
+  work for other platforms, such as solaris, hpux, and aix. CTENV is a
+  bash shell script. To use CTENV, please make sure that you are using
+  bash. Below is the list of tools and their version requirement for
+  CTENV.
+
+  - clearcase 7.0.1 or higher
+  - bash 3.2.25 or higher
+  - patch 2.7.5 or higher
+  - tar 1.15.1 or higher
+
+* How to install CTENV
+  To install CTENV in your system, simply copy whole <ctenv_dir> to
+  anywhere you want and put a path to <ctenv_dir> in your
+  $PATH. That's it.
+
+* How to configure CTENV
+  Below are four steps to configure CTENV
+
+  1) source CTENV start-up script
+
+     $ source <ctenv_dir>/ctenv_bashrc
+
+  2) run ctenv to get a "default" setting
+
+     $ ctenv
+
+     When you first run CTENV, it tries to create a "default"
+     configuration file under your ${HOME} directory. please say 'Y'
+
+  3) configure CTENV
+
+     $ vi ${HOME}/.ctenv/ctenvrc
+
+     In ctenvrc, there are five parameters for you to set. Please read
+     the comments and set proper values.
+
+  4) re-run CTENV to make sure that the setup is complete
+
+     $ ctenv
+
+* How to get on-line help
+  on-line help shows all available options and/or common use cases
+
+    $ ctenv    # this shows options only
+    $ ctenv -h # this shows options and most common use cases
+
+* How to get your own config specs
+  By default, there are two config specs under <ctenv_dir>/cs. As
+  their name says, they are templates that you can use to create your
+  own. So, make a copy and edit it. Please note that a filename for
+  config spec __should__ end with ".cs"
+
+* CTENV tutorial
+
+  + list available config specs and all views
+
+    $ ctenv -l
+
+    your output would be as follows;
+
+    CTENV[INFO|04/21 12:44]::VIEW: my config specs and views
+    >> config specs (under <path_to_global_config_specs>)
+            idx: name
+              0: globalcs
+              1: template.br
+              2: template
+
+    >> local config specs (under <path_to_local_config_specs>)
+            idx: name
+              3: mylocalcs
+
+    CTENV[SUCCESS|04/21 12:44]::VIEW: listing complete
+
+    Note: you wouldn't see "globalcs" and "mylocalcs" until you create
+    them.
+
+    In the output, you can see 'idx' and 'name' for config specs. you
+    can use either 'idx' or 'name' to specify your config spec for
+    ctenv.
+
+  + create a new dynamic view, my_view, using config spec, globalcs
+
+    $ ctenv -s globalcs -c my_view
+    # this will create a dynamic view with a tag name,
+    # [your_id]_my_view_globalcs_[machine]
+
+    NOTE: when you specify config spec, you can use 'idx', 0, instead
+    of 'name', globalcs
+
+    $ ctenv -s 0 -c my_view # the same as above
+
+  + create two dynamic views, my_view2, test w/ mylocalcs
+
+    $ ctenv -c -s 3 my_view2 test
+
+    NOTE: if you use '-C' instead of 'c', you will create a snapshot view
+
+  + check the created views
+
+    $ ctenv -l
+
+    CTENV[INFO|04/21 12:44]::VIEW: my config specs and views
+    >> config specs (under <path_to_global_config_specs>)
+            idx: name
+              0: globalcs
+              1: template.br
+              2: template
+
+    >> local config specs (under <path_to_local_config_specs>)
+            idx: name
+              3: mylocalcs
+
+    >> dynamic views
+            idx: clearcase tag
+              0: <your_id>_my_view_globalcs_<hostname>
+              1: <your_id>_my_view2_mylocalcs_<hostname>
+              2: <your_id>_test_mylocalcs_<hostname>
+
+    CTENV[SUCCESS|04/21 12:44]::VIEW: listing complete
+
+  + remove views w/ a given name in their tag name
+
+    $ ctenv -r my_view
+    # this removes my_view and my_view2 because my_view has a partial
+    # match with my_view2
+
+    NOTE: if you want to remove my_view only, use 'idx' 0.
+
+  + check in all the changes in the view, test
+
+    $ ctenv -ci test
+
+    NOTE: this checks in the files that are checked out by
+    'ctco'. how to check out files is explained in next section
+
+  + sync all checked-out files in the view, test
+
+    $ ctenv -sy test
+
+    NOTE: this syncs the files checked out by 'ctco'.
+
+  + export my changes in the view, test
+
+    $ ctenv -e test
+    # this creates the shell script, <your_id>_test_mylocalcs_<hostname>.sh
+    # the shell script contains all the changes you made
+
+    NOTE: export is highly useful feature where you can keep can
+    carry around your changes for back/forward port, code review, and
+    so on
+
+  + import <your_id>_test_mylocalcs_<hostname>.sh, into the other
+    view, new_view
+
+    $ ctenv -c -s mylocalcs new_view # create a new view first
+    $ ctenv -i <your_id>_test_mylocalcs_<hostname>.sh new_view
+
+    NOTE: this distills __changes__ stored in *.sh and applies them to
+    a new_view. if there are conflicts while applying the __changes__,
+    ctenv reports the conflicts and helps you to resolve them.
+
+  + perform 2 way diff on all checked-out files against their
+    predecessors in the view, test
+
+    $ ctenv -d test
+    $ ctcd test && ctenv -d . # cd into the view, test, do diffing for 'test'
+    # ctcd is a miscellaneous command provided by ctenv. ctcd reads
+    # ct.. cd (Change Dir). this will be explained in next section
+
+    NOTE: '.' has a special meaning only when your working directory,
+    $PWD, is under a view. In this case, . means the view, test. As
+    for the diffing tool, you can choose your own diffing tool by
+    setting CTENV_UCONF_DIFF_TOOL properly in your
+    ${HOME}/.ctenv/ctenvrc. you can put 'vimdiff', 'ediff', or
+    whatever you like.
+
+  + perform 2 way diff on given files against their predecessors in
+    your view, test
+
+    $ ctcd test && ctenv -d <file1> -d <dir1> -d <dir2>/<file2> .
+    # cd into the view, test, and do diffing on <file1>,
+    # <dir2>/<file2>, and all checked out files under <dir1>
+
+  + compare given files between two views, test and new_view
+
+    $ ctcd test && ctenv -D <file1> . new_view
+    get the <file1> from two views and compare those two
+
+** Miscellaneous commands
+   In this section, all miscellaneous commands are explained. they are
+   applied to files in a view rather than a view itself. you can check
+   them in on-line help. (ctenv -h)
+
+   + ctcd: cd into a given view, <view>
+
+     $ ctcd new_view # cd into new_view
+
+   + ctvcd: setview for <view>
+
+     $ ctvcd new_view # setview for new_view
+
+   + ctco: checkout given files
+     
+     $ ctco file1 dir1/file2 # checkout two files, file1 and dir1/file2
+
+   + ctci: check in given files
+
+     $ ctci file1 dir1/file2 # check in two files, file1 and dir1/file2
+
+   + ctsync: sync given files
+     
+     $ ctsync file1 file2 # sync two checked-out files, file1 and file2
+
+   + ctrvt: revert(uncheckout) given files
+
+     $ ctrvt file1 file2 # revert(uncheckout) two checked-out files, file1 and file2
+
+   + ctls: list all checked-out files under a given dir
+     $ ctls       # list all checked-out files under current dir
+     $ ctls <dir> # list all checked-out files under <dir>
+     $ ctls /     # list all checked-out files in a current view
+
+   + ctadd: add new files. note that dir w/ the files should be
+     checkout first
+
+     $ ctco .            # checkout a current dir
+     $ ctadd file1 file2 # add two files under the dir
+
+   + ctget: get files w/ given versions.
+
+     $ ctget <file1>@@<version1> <file2>@@<version2>
+
+     NOTE: for version, do 'cleartool desc <file1>'
+
+   + ctblame: figure out when <regexp> was first introduced in a <file>
+     $ ctblame <regexp> <file>
+
+* ediff for diffing and merging
+  ediff is a bash shell script that implements advanced diffing and
+  merging based on emacs. with ediff, we are able to do quick/easy
+  diffing/merging on terminal.
+
+** basic key bindings
+   - jump to next diff
+     "n"
+   - jump to previous diff
+     "p"
+   - get online help for diffing
+     "?"
+   - switch among source & diff frames
+     "ctrl-x ctrl-o"
+   - exit
+     "ctrl-x ctrl-c"
+     
+** examples
+   - diff two files (2-way diff)
+     > ediff file1 file2
+
+   - diff three files (3-way diff)
+     > ediff file1 file2 file3
+
+* any issues, questions, or supports
+  please send an email to freeaion@gmail.com

@@ -1,0 +1,47 @@
+#!/bin/bash
+# -------------------------------------------------------------------------
+# ctenv_bashrc: initialization script for ctenv
+#               before using ctenv, this script should be sourced
+#
+# Copyright 2016 by Yonghyun Hwang <freeaion@gmail.com>
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# Some rights reserved.
+# -------------------------------------------------------------------------
+
+# find the root dir for ctenv
+CTENV_GCONST_PATH_CTENV=${BASH_SOURCE[0]}
+if [ -z ${CTENV_GCONST_PATH_CTENV} ]; then
+    echo "internal error. cannot initialize env for ctenv. please report."
+    return 1
+fi
+
+CTENV_GCONST_PATH_CTENV=`readlink -f ${CTENV_GCONST_PATH_CTENV}`
+CTENV_GCONST_PATH_CTENV=${CTENV_GCONST_PATH_CTENV%/*}
+if [ ! -d ${CTENV_GCONST_PATH_CTENV} ]; then
+    echo "internal error. cannot locate ctenv. please report."
+    return 1
+fi
+export CTENV_GCONST_PATH_CTENV
+
+# include useful aliases for ctenv
+source ${CTENV_GCONST_PATH_CTENV}/lib/ctenv_cmds.lib
+
+# add path to ctenv
+if grep ".*${CTENV_GCONST_PATH_CTENV}:.*" <<<${PATH} &> /dev/null; then
+    # don't update $PATH because $PATH has ctenv already
+    :
+else
+    export PATH=${CTENV_GCONST_PATH_CTENV}:${PATH}
+fi
+
+# set prompt when a user does 'setview'
+if [ -z ${CLEARCASE_ROOT:-} ]; then
+    :
+else
+    # cmd prompt is updated for dynamic view showing names of view and config spec
+    export PS1="[\[\e[32;1m\]\h[\[\e[0;31m\]`ctenv_utils_get_vw_name ${CLEARCASE_ROOT}`|`ctenv_utils_get_cs_name ${CLEARCASE_ROOT}`\[\e[32;1m\]]\[\e[0m\]: \[\e[32;40m\]\w\[\e[0m\]] "
+fi

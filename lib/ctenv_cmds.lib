@@ -1,0 +1,748 @@
+#!/bin/bash
+# -------------------------------------------------------------------------
+# ctenv_cmds: implement miscellaneous commands
+#
+# Copyright 2016 by Yonghyun Hwang <freeaion@gmail.com>
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# Some rights reserved.
+# -------------------------------------------------------------------------
+
+# include common/shared util libs here
+source ${CTENV_GCONST_PATH_CTENV}/lib/ctenv_utils.lib
+
+#-------------------------------------------------------------
+# Global constants in ctenv_cmds.lib
+#-------------------------------------------------------------
+CTENV_GCONST_CMDS="cmds"
+CTENV_GCONST_VCD_OPT="-view"
+
+#-------------------------------------------------------------
+# Function Declaration
+#
+# note that all aliases here have their corresponding function
+# to seperate its cmd use and its actual implementation. if you are not
+# a developer for ctenv, don't need to take a look at the function
+# implementation
+#-------------------------------------------------------------
+# change directory into a given view root
+alias ctcd="ctenv_cmds_cd"
+alias ctvcd="ctenv_cmds_cd ${CTENV_GCONST_VCD_OPT}"
+
+# check out a file for edit
+alias ctco="ctenv_cmds_check_out_files"
+
+# check in files
+alias ctci="ctenv_cmds_check_in_files"
+
+# check out a file for edit
+alias ctadd="ctenv_cmds_add_files"
+
+# sync up w/ latest
+alias ctsync="ctenv_cmds_sync_files"
+
+# revert a checked-out file
+alias ctrvt="ctenv_cmds_remove_check_outs"
+
+# list files checked-out
+alias ctls="ctenv_cmds_list_check_out"
+
+# create merge arrows from src files to dest files
+alias ctarrow="ctenv_cmds_create_merge_arrow"
+
+# remove brtype obj
+#alias ctrmbr="ctenv_utils_remove_brtype_obj"
+# show history...
+alias ctblame="ctenv_cmds_clearcase_blame"
+# get a given file version
+alias ctget="ctenv_cmds_get_files"
+
+#-------------------------------------------------------------
+# Function Defintions
+#
+# Actual magic happens below
+#-------------------------------------------------------------
+function ctenv_cmds_cd
+{
+    if ! ctenv_utils_chk_ctenv_env; then
+        return 1
+    fi
+
+    # check all views
+    local vw=""
+    local vcdFlag="TRUE"
+    case $# in
+        0)
+            cd ${CTENV_UCONF_SNAPSHOT_ROOT_DIR}
+            return 0
+            ;;
+        1)
+            vw=$1
+            ;;
+        *)
+            if [ $1 = ${CTENV_GCONST_VCD_OPT} ]; then
+                vw=${2:-}
+                vcdFlag="FALSE"
+            else
+                ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                    "internal error on # of params. please report"
+                return 1
+            fi
+            ;;
+    esac
+
+    if [ "${vw}" = "." ]; then
+        vw="`ctenv_utils_resolve_dot`"
+        if [ -z ${vw:-} ]; then
+            ctenv_cmds_cd $(basename `pwd -L`)
+            return $?
+        else
+            if ! ctenv_utils_is_view_name ${vw}; then
+                vw=${vw%_*} # remove build opt
+                vw=${vw%_*} # remove system type
+            fi
+        fi
+    fi
+
+    ctenv_utils_load_views_info
+
+    local tagIdxArray=(`ctenv_utils_convert_to_tag_idxs ${vw}`)
+    if [ ${#tagIdxArray[@]} -eq 0 ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "given view, \"${vw}\", is invalid. check it again"
+        return 1
+    fi
+
+    local tagIdx=${tagIdxArray[0]}
+    local vwTagName=(${CTENV_GVAL_CLEARCASE_TAG_LIST[${tagIdx}]})
+
+    if ctenv_utils_is_snapshot_view ${tagIdx}; then
+        # for snapshot view
+        vwRootPath=${CTENV_UCONF_SNAPSHOT_ROOT_DIR}/${vwTagName}/${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT}
+        cd ${vwRootPath}
+    else
+        if [ ${vcdFlag} = "TRUE" ]; then
+
+            if [ ! -d ${CTENV_UCONF_DYNVIEW_ROOT_DIR}/${vwTagName}/${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT} ]; then
+                cleartool startview ${vwTagName}
+            fi
+
+            cd ${CTENV_UCONF_DYNVIEW_ROOT_DIR}/${vwTagName}/${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT}/server
+            return 0
+        fi
+
+        # for dynamic view
+        if [ -z ${CLEARCASE_ROOT:-} ]; then
+            cleartool setview ${vwTagName}
+        else
+            local vwName2=`ctenv_utils_get_vw_name ${CLEARCASE_ROOT}`
+            local vwName=`ctenv_utils_get_vw_name ${vwTagName}`
+            if [ ${vwName2} != ${vwName} ]; then
+                cleartool setview ${vwTagName}
+            else
+                cd /${CTENV_UCONF_CLEARCASE_MY_SRC_ROOT}/server
+            fi
+        fi
+    fi
+
+    return 0
+}
+
+function ctenv_cmds_check_out_files
+{
+    if ! ctenv_utils_chk_ctenv_env; then
+        return 1
+    fi
+
+    if [ -z "$*" ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+            "check out files"
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+            "usage: ctco <file1> <file2> ..."
+        return 0
+    fi
+
+    if ! ctenv_utils_process_files ctenv_utils_check_out_files_int $@; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} "cannot checkout files"
+    fi
+
+    return $?
+}
+
+function ctenv_cmds_add_files
+{
+    if ! ctenv_utils_chk_ctenv_env; then
+        return 1
+    fi
+
+    local files=($@)
+
+    if [ ${#files[@]} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+            "add new files"
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                             "usage: ctadd <file1> <file2> ..."
+        return 0
+    fi
+
+    for i in "${files[@]}"; do
+        if [ -f ${i} -o -d ${i} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                                  "${i} already exists. stop adding"
+            return 1
+        fi
+    done
+
+    # creat empty file first before add
+    touch "${files[@]}"
+
+    local -i retval=0
+    if ! ctenv_utils_process_files ctenv_utils_add_files_int "${files[@]}"; then
+        retval=$?
+        rm -f "${files[@]}"
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} "cannot add files"
+    fi
+
+    return ${retval}
+}
+
+function ctenv_cmds_check_in_files
+{
+    if ! ctenv_utils_chk_ctenv_env; then
+        return 1
+    fi
+
+    if [ -z "$*" ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+            "check in files"
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                             "usage: ctci <file1> <file2> ..."
+        return 0
+    fi
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMDS} "List of files to check in"
+    echo $@
+    echo ""
+    if ! ctenv_utils_confirm_usr_decision "Do you want to check in the files"; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} "cancel check in the files, $@"
+        return 0
+    fi
+
+    if ! ctenv_utils_process_files ctenv_utils_check_in_files_int $@; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} "cannot checkout files"
+    fi
+
+    return $?
+}
+
+function ctenv_cmds_remove_check_outs
+{
+    if ! ctenv_utils_chk_ctenv_env; then
+        return 1
+    fi
+
+    if [ -z "$*" ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+            "revert files"
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                             "usage: ctrvt <file1> <file2> ..."
+        return 0
+    fi
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMDS} "List of files to revert"
+    echo $@
+    echo ""
+    ctenv_utils_prt_info ${CTENV_GCONST_CMDS} "Once reverted, they cannot be recovered"
+    if ! ctenv_utils_confirm_usr_decision "Do you still want to revert"; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} "cancel reverting files, $@"
+        return 0
+    fi
+
+    if ! ctenv_utils_process_files ctenv_utils_remove_check_outs_int $@; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} "cannot revert files"
+    fi
+
+    return $?
+}
+
+function ctenv_cmds_list_check_out
+{
+    if ! ctenv_utils_chk_ctenv_env; then
+        return 1
+    fi
+
+    local param=${1:-}
+
+    local ISSHORT="TRUE"
+    local NEW_LINE="TRUE"
+
+    case ${param} in
+        -l)
+            NEW_LINE="FALSE"
+            param=${2:-}
+            ;;
+        -L)
+            ISSHORT="FALSE"
+            param=${2:-}
+            ;;
+        *)
+            ;;
+    esac
+
+    ctenv_utils_load_views_info
+
+    local -a tagIdxArray=(`ctenv_utils_convert_to_tag_idxs '.'`)
+    if [ ${#tagIdxArray[@]} -eq 0 ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} "not under a view. cannot list"
+        return 1
+    fi
+
+    local listFile=`ctenv_utils_get_cc_list_file ${tagIdxArray[0]}`
+
+    if [ -z ${listFile} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "internal error at listFile in ctenv_cmds_list_check_out. please report"
+        return 1
+    fi
+
+    local -a files=(`cat ${listFile} | sort`)
+    if [ ! ${#files[@]} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} "listing ${#files[@]} checked out files"
+
+        local relPath=`ctenv_utils_get_rel_path ${tagIdxArray[0]} ${param}`
+
+        if [ -z ${relPath:-} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                "cannot take a file as param"
+            return 1
+        fi
+
+        if [ ${ISSHORT} = "FALSE" ]; then
+            for i in "${files[@]}"; do
+                if grep "${relPath}.*" <<<"/${i}" &> /dev/null; then
+                    local file="${i#${relPath}/}"
+                    printf "\t%s\n" ${file}
+                fi
+            done
+
+        else
+            local formatStr="\t%s\n"
+
+            if [ ${NEW_LINE} = "FALSE" ]; then
+                printf "\t"
+                formatStr="%s "
+            fi
+            for i in "${files[@]}"; do
+                i=${i%@@*}
+
+                if grep "${relPath}.*" <<<"/${i}" &> /dev/null; then
+                    printf "${formatStr}" "${i#${relPath}/}"
+                    #printf "%s " "${i#${relPath}/}"
+                fi
+            done
+
+            if [ ${NEW_LINE} = "FALSE" ]; then
+                printf "\n"
+            fi
+        fi
+
+        echo ""
+        ctenv_utils_prt_success ${CTENV_GCONST_CMDS} "list complete"
+    else
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} "no files are checked out"
+    fi
+
+    return 0
+}
+
+function ctenv_cmds_create_merge_arrow
+{
+    if ! ctenv_utils_chk_ctenv_env; then
+        return 1
+    fi
+
+    local src=${1:-}
+    local dest=${2:-}
+
+    if [ -z ${dest} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "please specify <src_file> and <dest_file>"
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "in <src_file> and <dest_file>, there should be lines w/ file@@version"
+        return 1
+    fi
+
+    if [ ! -f ${src} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "src, ${src}, doesn't exist"
+        return 1
+    fi
+
+    if [ ! -f ${dest} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "dest, ${dest}, doesn't exist"
+        return 1
+    fi
+
+    local -a tokens=()
+    local line=""
+
+    tmpSrc=$(ctenv_utils_get_tmp_file)
+    sort -u ${src} >| ${tmpSrc}
+    local -a srcFiles=()
+    local -a srcVers=()
+    while read -r line; do
+        srcFiles[${#srcFiles[@]}]=${line%%@@*}
+        srcVers[${#srcVers[@]}]=${line##*@@}
+    done < <(cat ${tmpSrc})
+    rm -f ${tmpSrc}
+
+    if [ ${#srcFiles[@]} -ne ${#srcVers[@]} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "internal error in parsing src"
+        return 1
+    fi
+
+    tmpDest=$(ctenv_utils_get_tmp_file)
+    sort -u ${dest} >| ${tmpDest}
+    local -a destFiles=()
+    local -a destVers=()
+    while read -r line; do
+        destFiles[${#destFiles[@]}]=${line%%@@*}
+        destVers[${#destVers[@]}]=${line##*@@}
+    done < <(cat ${tmpDest})
+    rm -f ${tmpDest}
+
+    if [ ${#destFiles[@]} -ne ${#destVers[@]} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "internal error in parsing dest"
+        return 1
+    fi
+
+    if [ ${#destFiles[@]} -ne ${#srcFiles[@]} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "# of files in dest should be the same as in src"
+        return 1
+    fi
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+        "sanity check before creating merge arrow"
+    local -i i=0
+    for ((i=0; i<${#srcFiles[@]}; i++)); do
+        if [ ${srcFiles[i]} != ${destFiles[i]} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                "files in dest should be the same as in src"
+            return 1
+        fi
+
+        if [ ! -f ${srcFiles[i]} ] && [ ! -d ${srcFiles[i]} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                "${srcFiles[i]}, specified in given files/dirs, doesn't exists."
+            ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                "please try again under correct dir and clearcase view"
+            return 1
+        fi
+
+        if [ -z ${srcVers[i]} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                "src ver should not be empty"
+            return 1
+        fi
+
+        if [ ${srcVers[i]} = ${destVers[i]} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                "dest ver should not be the same as src ver"
+            return 1
+        fi
+    done
+    ctenv_utils_prt_success ${CTENV_GCONST_CMDS} \
+        "sanity check complete"
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+        "info on merge arrow creation"
+    for ((i=0; i<${#srcFiles[@]}; i++)); do
+        printf "%s\n" ${srcFiles[i]}
+        printf "  from: %s\n" ${srcVers[i]}
+        printf "  to  : %s\n" ${destVers[i]}
+    done
+
+    local viewName=`ctenv_utils_resolve_dot`
+    ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+        "current dest view: ${viewName}"
+    ctenv_utils_prt_warn ${CTENV_GCONST_CMDS} \
+        "you should under dest view. make sure the above is correct"
+
+    if ! ctenv_utils_confirm_usr_decision "Proceed merge arrow creation w/ info above?"; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+            "stop creating merge arrow"
+        return 0
+    fi
+
+    for ((i=0; i<${#srcFiles[@]}; i++)); do
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} "creating merge arrow for ${srcFiles[i]}"
+        printf "  from: %s\n" ${srcVers[i]}
+        printf "  to  : %s\n" ${destVers[i]}
+        cleartool merge -ndata -to ${srcFiles[i]} \
+            -version ${srcVers[i]} ${destVers[i]}
+    done
+    ctenv_utils_prt_success ${CTENV_GCONST_CMDS}  \
+        "merge arrows are created"
+
+    return 0
+}
+
+function ctenv_cmds_sync_files
+{
+    if ! ctenv_utils_chk_ctenv_env; then
+        return 1
+    fi
+
+    if [ -z "$*" ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+            "sync files"
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                             "usage: ctsync <file1> <file2> ..."
+        return 0
+    fi
+
+    if ! ctenv_utils_process_files ctenv_utils_sync_files_int $@; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} "cannot sync files"
+    fi
+
+    return $?
+}
+
+function ctenv_cmds_clearcase_blame_date
+{
+    local fromDate=${1:-}
+    local toDate=${2:-}
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                         "searching files changed from ${fromDate} to ${toDate} ..."
+    local -a files=$(cleartool find . -type f -version "created_since(${fromDate}) && (! created_since(${toDate}))" -nxn -print)
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                         "list all files changed from ${fromDate} to ${toDate}"
+    for i in ${files[@]}; do
+        printf "\t${i}\n"
+    done
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                         "searching who made changes from ${fromDate} to ${toDate} ..."
+    local users=$(for i in ${files[@]}; do
+                      cleartool lshistory -since ${fromDate} -fmt "%u\n" ${i}
+                  done | sort -u)
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                         "list users who made changes from ${fromDate} to ${toDate}"
+    for i in ${users[@]}; do
+        printf "\t${i}\n"
+    done
+
+    return 0
+}
+
+function ctenv_cmds_clearcase_blame_regexp
+{
+    local regexp=${1:-}
+    local ifile=${2:-}
+
+    if [ -z "${ifile}" ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "not enough cmd paramters are given"
+
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+            "usage: ctblame <regexp> file"
+
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+        "Use this command to find out where a certain line in a file was first introduced. Note that the result of 'ctblame' might not be 100% correct if we have complex branches."
+        return 1
+    fi
+
+    # Get the full name of the file, including the current branch
+    if [ -d "${ifile}" ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "This doesn't work on directories, sorry man."
+        return 1
+    fi
+    local this_version=$(cleartool ls -s "${ifile}")
+    if [ $? != 0 ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "clearcase error. stop now"
+        return 1
+    fi
+
+    if ! grep "$regexp" ${ifile} 2>&1 1>/dev/null ; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+            "I didn't find this regexp in the starting file!"
+        return 1
+    fi
+
+    # Turn \ into /
+    #this_version=$(echo "${this_version}" | tr \\\\ /)
+    this_version=${this_version//\\\\/\/}
+
+    local trimmed=${this_version%@@*}
+    local currfile=${this_version}
+    local lastone=${currfile}
+
+    local -i nummerges=1
+    local firstloop=1
+
+    while [ $nummerges -gt 0 ]; do
+        while [ "${firstloop}" ] || grep "$regexp" $currfile 2>&1 1>/dev/null; do
+            firstloop=
+            # Find the predecessor version
+            lastone=${currfile}
+            local pred=$(cleartool describe "$currfile" | \
+                grep 'predecessor version:'    | \
+                awk '{print $3}'               | \
+                tr \\\\ / )
+            if [ -z "${pred}" ]; then
+                ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                    "Couldn't find any more predecessors!"
+                return 1
+            fi
+            currfile="${trimmed}@@${pred}"
+            local shortname=$(echo $currfile | \
+                awk '{ len=length($0); print substr($0, len-30, 30+1) }')
+
+            ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                "Trying predecessor: ...${shortname}"
+        done
+
+        # We've gone as far as we could on the branch, so now look for a merge from
+        # some other branch and follow that.
+        currfile=${lastone}
+
+        local noversion=${currfile%/*}         # remove the version number
+        local this_branch=${noversion##*/}     # keep only the branch name
+
+        merge_from=$(cleartool describe "${currfile}" | \
+            grep 'Merge <-'                | \
+            tr \\\\ /                      | \
+            egrep -v ${this_branch}/[0-9]    | \
+            awk '{print $3}' )
+      
+        nummerges=$(echo ${merge_from} | wc -w)
+        if [ $nummerges -gt 1 ]; then
+            ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                "Found multiple merges:"
+            echo "   " ${merge_from} | tr " " '\n'
+            ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                "I'm going to arbirtrarily choose the first one."
+        fi
+      
+        currfile=$(echo ${merge_from} | cut -d " " -f 1)
+    done
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+        "First version was found here:  ${lastone}"
+    cleartool describe "${lastone}"
+
+    return 0
+}
+
+function ctenv_cmds_clearcase_blame
+{
+    local opt=${1:-}
+
+    if [ -z "${opt}" ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+            "search clearcase history for blame :)"
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+            "usage: ctblame <regexp> file"
+        # for future, not fully tested
+        #ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+        #    "       or "
+        #ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+        #    "       ctblame -t <from_date> <to_date>"
+        #ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+        #    ""
+        #ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+        #    "       date format: <day>-<mon>-<year>.hour:min"
+        #ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+        #    "                ex) 09-Apr-2015.16:05"
+        return 1
+    fi
+
+    if [ "${opt}" = "-t" ]; then
+        ctenv_cmds_clearcase_blame_date "${2:-}" "${3:-}"
+    else
+        ctenv_cmds_clearcase_blame_regexp "${1:-}" "${2:-}"
+    fi
+}
+
+function ctenv_cmds_get_files
+{
+    if [ $# -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+            "get files w/ given versions. for version, do 'cleartool desc <file1>'"
+        ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+            "ctget <file1>@@<version1> ..."
+        return 0
+    fi
+
+    local srcFile=""
+    for srcFile in "$@"; do
+
+        local filename=${srcFile%%@@*}
+        local version=${srcFile#*@@}
+
+        if [ ${filename} = ${srcFile} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                "given \"${srcFile}\", is invalid form"
+            continue
+        fi
+
+        if [ ! -f ${filename} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                "given file, ${filename}, doesn't exist"
+            continue
+        fi
+
+        local -a tokens=()
+        IFS=". " read -a tokens <<< ${filename}
+
+        if [ ${#tokens[@]} -ge 3 ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                "filename contains more than two '.'s that's not supported for now"
+            continue
+        fi
+
+        local destFileName=${tokens[0]}
+        local destFileExt=${tokens[1]:-}
+
+        tokens=()
+        IFS="/ " read -a tokens <<< ${version}
+
+        if [ ${#tokens[@]} -le 1 ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                "given \"${srcFile}\", is invalid form"
+            continue
+        fi
+
+        local version="${tokens[${#tokens[@]}-2]}__${tokens[${#tokens[@]}-1]}"
+
+        local destFile=""
+        if [ -z ${destFileExt} ]; then
+            destFile="${destFileName}__${version}"
+        else
+            destFile="${destFileName}__${version}.${destFileExt}"
+        fi
+
+        echo cleartool get -to ${destFile} ${srcFile}
+        if cleartool get -to ${destFile} ${srcFile}; then
+            ctenv_utils_prt_info ${CTENV_GCONST_CMDS} \
+                "given file, ${srcFile}, is fetched as ${destFile}"
+        else
+            ctenv_utils_prt_error ${CTENV_GCONST_CMDS} \
+                "given file, ${srcFile}, cannot be fetched"
+        fi
+    done
+
+    return 0
+}

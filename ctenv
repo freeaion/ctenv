@@ -1,0 +1,1492 @@
+#!/bin/bash
+# -------------------------------------------------------------------------
+# ctenv: automate clearcase view management
+#
+# Copyright 2016 by Yonghyun Hwang <freeaion@gmail.com>
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# Some rights reserved.
+# -------------------------------------------------------------------------
+# 04/13/2016 Yonghyun Hwang
+#            Initial release
+
+#-------------------------------------------------------------
+# include utility libs and perform sanity check
+#-------------------------------------------------------------
+if [ -z ${CTENV_GCONST_PATH_CTENV:-} ]; then
+    echo "ERROR: ctenv is not initialized. please make sure that ctenv_bashrc is sourced."
+    exit 1
+fi
+
+if [ ! -d ${CTENV_GCONST_PATH_CTENV} ]; then
+    echo "ERROR: ctenv is not properly installed. please make sure that ctenv is under ${CTENV_GCONST_PATH_CTENV}."
+    exit 1
+fi
+
+source ${CTENV_GCONST_PATH_CTENV}/lib/ctenv_utils.lib
+
+# check settings and envs for ctenv
+if ! ctenv_utils_chk_ctenv_env; then
+    exit 1
+fi
+
+#-------------------------------------------------------------
+# Global constants
+#-------------------------------------------------------------
+CTENV_GCONST_CMD_VIEW="VIEW"
+CTENV_GCONST_CMD_MODE_CREATE_VW="CREATE_VIEW"
+CTENV_GCONST_CMD_MODE_LIST_VW="LIST_VIEW"
+CTENV_GCONST_CMD_MODE_EXPORT_VW="EXPORT_VIEW"
+CTENV_GCONST_CMD_MODE_IMPORT_VW="IMPORT_VIEW"
+CTENV_GCONST_CMD_MODE_REMOVE_VW="REMOVE_VIEW"
+CTENV_GCONST_CMD_MODE_DIFF_VW="DIFF_VIEW"
+CTENV_GCONST_CMD_MODE_CHECKIN_VW="CHECKIN_VIEW"
+CTENV_GCONST_CMD_MODE_SYNC_VW="SYNC_VIEW"
+CTENV_GCONST_CMD_DIFF="DIFF"
+CTENV_GCONST_CMD_DIFF1="DIFF1"
+CTENV_GCONST_CMD_DIFF3="DIFF3"
+CTENV_GCONST_CMD_DIFF_VW="DIFF_VW"
+CTENV_GCONST_CMD_EXPORT="EXPORT"
+CTENV_GCONST_CMD_EXPORT0="EXPORT0"
+
+CTENV_GCONST_CS_MARK="__CTENV_CONFIG_SPEC_START__"
+CTENV_GCONST_TAR_MARK="__CTENV_TAR_ARCHIVE_START__"
+CTENV_GCONST_TAR_MARK2="__CTENV_TAR_ARCHIVE_START2__"
+
+#-------------------------------------------------------------
+# Global variables
+#-------------------------------------------------------------
+CTENV_GVAL_CMD_MODE=""
+CTENV_GVAL_OPT_VIEW=""
+CTENV_GVAL_OPT_CONF_SPEC=""
+CTENV_GVAL_OPT_DIFF_MODE=${CTENV_GCONST_CMD_DIFF}
+CTENV_GVAL_OPT_EXPORT_MODE=${CTENV_GCONST_CMD_EXPORT}
+CTENV_GVAL_PWD=`pwd -P`
+CTENV_GVAL_IMPORT_FILE=""
+CTENV_GVAL_CMD_DIFF_AGO=1
+
+#-------------------------------------------------------------
+# Global arrays
+#-------------------------------------------------------------
+CTENV_GARRAY_PARAMETERS=()
+CTENV_GARRAY_DIFF_ELEMS=()
+
+#-------------------------------------------------------------
+# Global flags
+#-------------------------------------------------------------
+CTENV_GFLAG_DYNAMIC_VIEW="TRUE"
+CTENV_GFLAG_INTERACTIVE="TRUE"
+CTENV_GFLAG_VIEW_COMMIT="FALSE"
+
+#-------------------------------------------------------------
+# Function definitions
+#-------------------------------------------------------------
+# print usage
+function ctenv_view_prt_usage
+{
+    ctenv_utils_prt_cmd_heading ${CTENV_GCONST_VERSION}
+    echo 1>&2 Usage: ctenv "[options] [VIEW1] [VIEW2] ... [VIEWn]"
+    echo " + view management options:"
+    echo ""
+    echo "  1) create/delete/list views"
+    echo "     --create|-c     create dynamic views"
+    echo "     --Create|-C     create snapshot views"
+    echo "                     NOTE: default is always dynamic view"
+    echo "     --remove|-r     remove views"
+    echo "     --list|-l       list available config specs and created views"
+    echo "     --spec|-s [CONFIG_SPEC]"
+    echo "                     specify a [CONFIG_SPEC]"
+    echo ""
+
+    echo "  2) checkin/sync views"
+    echo "     --checkin|-ci   check-in all checked-out files"
+    echo "                     NOTE: files should be checked-out by 'ctco'"
+    echo "     --commit|-co    check-in all checked-out files and check them out again"
+    echo "     --sync|-sy      sync all checked-out files against main stream"
+    echo ""
+
+    echo "  3) export/import views"
+    echo "     --export|-e     export changes made in checked-out files for views"
+    echo "     --export0|-e0   export changes btn files and their version 0 for views"
+    echo "                     NOTE: highly useful if you export your private branch"
+    echo "     --import|-i [IMPORT_FILE]"
+    echo "                     import changes from [IMPORT_FILE] into views"
+    echo "                     NOTE: [IMPORTE_FILE] is obtained by --export"
+    echo ""
+
+    echo "  4) diff options"
+    echo "     -d          [FILE|DIR|]"
+    echo "                     do a 2 way diff btn a file and its direct predecessors"
+    echo "                     for a [FILE] in a view"
+    echo "                     if nothing specified, do it for all checked-out files"
+    echo "     -dn         [FILE|DIR|]"
+    echo "                     do a 2 way diff btn file and their file@@version-n"
+    echo "     --diff3     [FILE|DIR|]"
+    echo "                     do a 3 way diff among a file, its latest, and its pred"
+    echo "     --Diff|-D   [FILE|DIR|]"
+    echo "                     do a 2 way diff for a file btn two views"
+    echo ""
+
+    echo "  5) miscellaneous"
+    echo "     --help|-h       print out this message, examples, miscellaneous"
+    echo ""
+}
+
+function ctenv_view_prt_misc
+{
+    echo " + misc commands:"
+    echo "   ctcd  <view>: cd into a view, <view>"
+    echo "   ctvcd <view>: do setview for <view>"
+    echo ""
+    echo "   ctco   <file> ...: checkout files"
+    echo "   ctci   <file> ...: check in files"
+    echo "   ctsync <file> ...: sync files"
+    echo "   ctrvt  <file> ...: revert(uncheckout) files"
+    echo ""
+    echo "   ctls <dir>: list all checkedout files under a <dir>"
+    echo "   ctls      : list all checkedout files under current dir"
+    echo "   ctls /    : list all checkedout files in a view"
+    echo ""
+    echo "   ctadd  : add new file elements. run 'ctadd' to see usage"
+    echo "   ctget  : get file w/ version. run 'ctget' for its usage"
+    echo "   ctblame <regexp> <file>: figure out when <regexp> was first introduced in <file>"
+    echo ""
+}
+
+function ctenv_view_prt_examples
+{
+    echo " + examples:"
+    echo "    1) list available config specs and views"
+    echo "       > ctenv -l"
+    echo ""
+    echo "    2) create two dynamic views, bug_123 and bug_abc"
+    echo "       using config spec, mycs"
+    echo "       > ctenv -s mycs -c bug_123 bug_abc"
+    echo ""
+    echo "    3) remove views, bug_abc and bug_123"
+    echo "       > ctenv -r bug_abc bug_123"
+    echo ""
+    echo "    4) check in all changes in a view, bug_abc"
+    echo "       > ctenv -ci bug_abc"
+    echo ""
+    echo "    5) sync checked-out files against main truck in a view, bug_abc"
+    echo "       > ctenv -sy bug_abc"
+    echo ""
+    echo "    6) export a view, bug_123"
+    echo "       > ctenv -e bug_123"
+    echo "       NOTE: export can be used for back-port, code review, and so on"
+    echo ""
+    echo "    7) import <your_id>_bug123_confspec_<hostname>.sh to a view, bug_def"
+    echo "       > ctenv -i <your_id>_bug123_confspec_<hostname>.sh bug_def"
+    echo ""
+    echo "    8) perform a 2 way diff for all checked-out files in a view, bug_123"
+    echo "       > ctenv -d bug_123"
+    echo ""
+}
+
+function ctenv_view_chk_n_set_cmd_opts
+{
+    # need to validate all opts sanity
+    if [ -z ${CTENV_GVAL_CMD_MODE} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "please specify what to do"
+        return 1
+    fi
+
+    if [ -z ${CTENV_GVAL_OPT_CONF_SPEC} ]; then
+        if [ ${CTENV_GVAL_CMD_MODE} = ${CTENV_GCONST_CMD_MODE_CREATE_VW} ]; then
+
+            ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "config spec should be specified to create views"
+            return 1
+        fi
+    fi
+
+    if [ ${#CTENV_GARRAY_PARAMETERS[@]} -eq 0 ]; then
+        if [ ${CTENV_GVAL_CMD_MODE} != ${CTENV_GCONST_CMD_MODE_LIST_VW} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "no views are given"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+function ctenv_view_cmd_parse
+{
+    if [ -z $1 ]; then
+        ctenv_view_prt_usage
+        exit 0
+    fi
+
+    local -i i=0
+
+    while [ $# -gt 0 ]; do    # Until you run out of parameters . . .
+    case "$1" in
+        --create|-c)
+            CTENV_GVAL_CMD_MODE=${CTENV_GCONST_CMD_MODE_CREATE_VW}
+            ;;
+        --Create|-C)
+            CTENV_GVAL_CMD_MODE=${CTENV_GCONST_CMD_MODE_CREATE_VW}
+            CTENV_GFLAG_DYNAMIC_VIEW="FALSE"
+            ;;
+        --checkin|-ci)
+            CTENV_GVAL_CMD_MODE=${CTENV_GCONST_CMD_MODE_CHECKIN_VW}
+            ;;
+        --commit|-co)
+            CTENV_GVAL_CMD_MODE=${CTENV_GCONST_CMD_MODE_CHECKIN_VW}
+            CTENV_GFLAG_VIEW_COMMIT="TRUE"
+            ;;
+        --export*|-e*)
+            CTENV_GVAL_CMD_MODE=${CTENV_GCONST_CMD_MODE_EXPORT_VW}
+            case "$1" in
+                --export|-e)
+                    CTENV_GVAL_OPT_EXPORT_MODE=${CTENV_GCONST_CMD_EXPORT}
+                    ;;
+                --export0|-e0)
+                    CTENV_GVAL_OPT_EXPORT_MODE=${CTENV_GCONST_CMD_EXPORT0}
+                    ;;
+            esac
+            ;;
+        --import|-i)
+            CTENV_GVAL_CMD_MODE=${CTENV_GCONST_CMD_MODE_IMPORT_VW}
+            CTENV_GVAL_IMPORT_FILE=$2
+            shift
+            ;;
+        --force|-f)
+            CTENV_GFLAG_INTERACTIVE="FALSE"
+            ;;
+        --list|-l)
+            CTENV_GVAL_CMD_MODE=${CTENV_GCONST_CMD_MODE_LIST_VW}
+            if ! ctenv_utils_is_cmd_opts "$2"; then
+                CTENV_GVAL_LIST_MASK="$2"
+                shift
+            fi
+            ;;
+        --remove|-r)
+            CTENV_GVAL_CMD_MODE=${CTENV_GCONST_CMD_MODE_REMOVE_VW}
+            ;;
+        --spec|-s)
+            CTENV_GVAL_OPT_CONF_SPEC=$2
+            shift
+            ;;
+        --sync|-sy)
+            CTENV_GVAL_CMD_MODE=${CTENV_GCONST_CMD_MODE_SYNC_VW}
+            ;;
+        --diff*|-d*)
+            CTENV_GVAL_CMD_MODE=${CTENV_GCONST_CMD_MODE_DIFF_VW}
+            case "$1" in
+                --diff3)
+                    CTENV_GVAL_OPT_DIFF_MODE=${CTENV_GCONST_CMD_DIFF3}
+                    ;;
+                -d)
+                    CTENV_GVAL_OPT_DIFF_MODE=${CTENV_GCONST_CMD_DIFF}
+                    ;;
+                -d*)
+                    CTENV_GVAL_OPT_DIFF_MODE=${CTENV_GCONST_CMD_DIFF1}
+                    CTENV_GVAL_CMD_DIFF_AGO=${1#-d}
+                    if ! ctenv_utils_is_number ${CTENV_GVAL_CMD_DIFF_AGO}; then
+                        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "Invalid option, \"$1\"."
+                        exit 1
+                    fi
+                    ;;
+                -*)
+                    ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "Invalid option, \"$1\"."
+                    exit 1
+                    ;;
+            esac
+
+            if ctenv_utils_is_cmd_args "$2"; then
+                CTENV_GARRAY_DIFF_ELEMS[${#CTENV_GARRAY_DIFF_ELEMS[@]}]="$2"
+                shift
+            fi
+            ;;
+        --Diff|-D)
+            CTENV_GVAL_CMD_MODE=${CTENV_GCONST_CMD_MODE_DIFF_VW}
+            CTENV_GVAL_OPT_DIFF_MODE=${CTENV_GCONST_CMD_DIFF_VW}
+
+            if ctenv_utils_is_cmd_args "$2"; then
+                CTENV_GARRAY_DIFF_ELEMS[${#CTENV_GARRAY_DIFF_ELEMS[@]}]="$2"
+                shift
+            fi
+            ;;
+        --help|-h)
+            ctenv_view_prt_usage
+            ctenv_view_prt_misc
+            ctenv_view_prt_examples
+            exit 0
+            ;;
+        -*)
+            ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "Invalid option, \"$1\"."
+            exit 1
+            ;;
+        * )
+            CTENV_GARRAY_PARAMETERS[i]=$1
+            i=${i}+1
+            ;;
+    esac
+    shift # Check next set of parameters.
+    done
+
+    # check default opts and set it
+    ctenv_view_chk_n_set_cmd_opts
+
+    return $?
+}
+
+function ctenv_view_list_views
+{
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "my config specs and views"
+
+    # load info on config spec and print it
+    if ! ctenv_utils_load_cs_list; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "fail to list"
+        return 1
+    fi
+    ctenv_utils_prt_config_specs
+
+    # load info on all views
+    ctenv_utils_load_views_info
+
+    local tagIdxList=()
+    local -i i=0
+    if [ ! ${CTENV_GVAL_CLEARCASE_DYN_START} -eq 0 ]; then
+        local -i snapTagListMax=${CTENV_GVAL_CLEARCASE_DYN_START}-1
+        for ((i=0; i<=${snapTagListMax}; i++)); do
+            tagIdxList=(${tagIdxList[@]} ${i})
+        done
+    fi
+    ctenv_utils_prt_snap_views ${tagIdxList[@]}
+
+    if [ ${CTENV_GVAL_CLEARCASE_DYN_START} -eq ${#CTENV_GVAL_CLEARCASE_TAG_LIST[@]} ]; then
+        tagIdxList=()
+    else
+        local -i tagListMax=${#CTENV_GVAL_CLEARCASE_TAG_LIST[@]}
+        for ((; i<${tagListMax}; i++)); do
+            tagIdxList=(${tagIdxList[@]} ${i})
+        done
+    fi
+    ctenv_utils_prt_dyn_views ${tagIdxList[@]}
+
+    ctenv_utils_prt_success ${CTENV_GCONST_CMD_VIEW} "listing complete"
+
+    return 0
+}
+
+function ctenv_view_create_views
+{
+    if [ ${CTENV_GFLAG_DYNAMIC_VIEW} = "FALSE" ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "create snapshot views"
+    else
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "create dynamic views"
+    fi
+
+    local csPath=""
+    if ctenv_utils_is_number ${CTENV_GVAL_OPT_CONF_SPEC}; then
+        if ! ctenv_utils_load_cs_list; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "fail to load config spec"
+            return 1
+        fi
+
+        local -i tmpIdx=${CTENV_GVAL_OPT_CONF_SPEC}
+        if [ ${CTENV_GVAL_OPT_CONF_SPEC} -lt ${#CTENV_GVAL_CS_LIST[@]} ]; then
+            CTENV_GVAL_OPT_CONF_SPEC=${CTENV_GVAL_CS_LIST[${CTENV_GVAL_OPT_CONF_SPEC}]}
+        else
+            ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "invalid config spec, ${CTENV_GVAL_OPT_CONF_SPEC}, is given. please check valid config specs"
+            return 1
+        fi
+
+        if [ ${tmpIdx} -lt ${CTENV_GVAL_CS_LOCAL_START} ]; then
+            csPath=${CTENV_GCONST_PATH_CS}/${CTENV_GVAL_OPT_CONF_SPEC}.cs
+        else
+            csPath=${CTENV_UCONF_CONFIG_SPEC_DIR}/${CTENV_GVAL_OPT_CONF_SPEC}.cs
+        fi
+    else
+        local csFiles=(`echo ${CTENV_GCONST_PATH_CS}/*${CTENV_GVAL_OPT_CONF_SPEC}*`)
+        if [ -f ${csFiles[0]} ]; then
+            csPath=${csFiles[0]}
+        else
+            # try local config specs
+            csFiles=(`echo ${CTENV_UCONF_CONFIG_SPEC_DIR}/*${CTENV_GVAL_OPT_CONF_SPEC}*`)
+            if [ -f ${csFiles[0]} ]; then
+                csPath=${csFiles[0]}
+            else
+                ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "invalid config spec, ${CTENV_GVAL_OPT_CONF_SPEC}, is given. please check valid config specs"
+                return 1
+            fi
+        fi
+    fi
+
+    # handle branch name
+    local brName=`ctenv_utils_get_branch_name ${csPath}`
+    local csBrFile=""
+    if [ ! -z ${brName} ]; then
+        if [ ${brName} = '${CTENV_CLEARCASE_BRANCH_NAME}' ]; then
+            csBrFile=$(ctenv_utils_get_tmp_file)
+            ctenv_utils_add_tmp_file_list ${csBrFile}
+        elif ! ctenv_utils_create_brtype_obj ${brName}; then
+            # fail to reuse existing br or create a new one
+            return 1
+        fi
+    fi
+
+    local vwDirPath=""
+    local vwDirName=""
+    local -i len=${#CTENV_GARRAY_PARAMETERS[@]}
+    local -i i=0
+
+    if [ ${CTENV_GFLAG_DYNAMIC_VIEW} = "FALSE" ]; then
+        pushd ${CTENV_UCONF_SNAPSHOT_ROOT_DIR} >& /dev/null
+        for (( i=0; i<len; i++)); do
+            vwDirName=`ctenv_utils_make_vw_tag_name ${CTENV_GARRAY_PARAMETERS[i]} ${CTENV_GVAL_OPT_CONF_SPEC}`
+
+            vwDirPath=${CTENV_UCONF_SNAPSHOT_ROOT_DIR}/${vwDirName}
+            if [ -d ${vwDirPath} ]; then
+                ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "view, \"${CTENV_GARRAY_PARAMETERS[i]}\", already exists."
+                continue
+            fi
+
+            ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                "creating view, \"${CTENV_GARRAY_PARAMETERS[i]}\". please wait."
+
+            # csBrFile = null means no branch or branch name is fixed
+            if [ ! -z ${csBrFile} ]; then
+                brName='ctenv_utils_make_br_name ${CTENV_GARRAY_PARAMETERS[i]} ${CTENV_GVAL_OPT_CONF_SPEC}'
+                sed "s/\${CTENV_CLEARCASE_BRANCH_NAME}/${brName}/" ${csPath} >| ${csBrFile}
+                ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                    "creating brtype object, ${brName}"
+                if ! ctenv_utils_create_brtype_obj ${brName}; then
+                    ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                        "fail to create brtype obj. stop creating views"
+                    exit 1
+                fi
+            fi
+
+            cleartool mkview -snapshot -tag ${vwDirName} -stgloc -auto ${vwDirName}
+            if [ ! $? -eq 0 ]; then
+                ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                    "fail to create view, \"${CTENV_GARRAY_PARAMETERS[i]}\". skip"
+                if [ ! -z ${csBrFile} ]; then
+                    ctenv_utils_remove_brtype_obj ${brName}
+                fi
+                continue
+            fi
+
+            if ! ctenv_utils_gen_vw_line_snapshot ${vwDirName} ${brName} \
+                 >> ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_VW_LIST_FILE}; then
+                ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                                      "fail to update cache file of ctenv for the view, \"${CTENV_GARRAY_PARAMETERS[i]}\". skip"
+                continue
+            fi
+
+            pushd ${vwDirPath} >& /dev/null
+            if cleartool setcs -tag ${vwDirName} ${csPath}; then
+                # create empty cc list file
+                ctenv_utils_touch_ccfile ${vwDirName}
+
+                ctenv_utils_prt_success ${CTENV_GCONST_CMD_VIEW} \
+                    "view, \"${CTENV_GARRAY_PARAMETERS[i]}\", is created"
+            else
+                ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                    "fail to create view, \"${CTENV_GARRAY_PARAMETERS[i]}\" skip"
+            fi
+            popd >& /dev/null
+        done
+        popd >& /dev/null
+    else
+        for (( i=0; i<len; i++)); do
+
+            local tmp_cs=$(ctenv_utils_get_tmp_file)
+            ctenv_utils_add_tmp_file_list ${tmp_cs}
+            grep -v 'load' ${csPath} | \
+                sed "s|^time .*|time `ctenv_utils_get_clearcase_date`|g" > ${tmp_cs}
+            if [ ! $? -eq 0 ]; then
+                ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "fail to get config spec, exit"
+                exit 1
+            fi
+
+            if [ ! -z ${csBrFile} ]; then
+                brName=`ctenv_utils_make_br_name ${CTENV_GARRAY_PARAMETERS[i]} ${CTENV_GVAL_OPT_CONF_SPEC}`
+                sed "s/\${CTENV_CLEARCASE_BRANCH_NAME}/${brName}/" ${tmp_cs} >| ${csBrFile}
+
+                ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                    "creating brtype object, ${brName}"
+                if ! ctenv_utils_create_brtype_obj ${brName}; then
+                    ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                        "fail to create brtype obj. stop creating views"
+                    exit 1
+                fi
+
+                tmp_cs=${csBrFile}
+            fi
+
+            vwDirName=`ctenv_utils_make_vw_tag_name ${CTENV_GARRAY_PARAMETERS[i]} ${CTENV_GVAL_OPT_CONF_SPEC}`
+            ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                "creating view, \"${CTENV_GARRAY_PARAMETERS[i]}\". please wait."
+            cleartool mkview -tag ${vwDirName} -stgloc -auto
+            if [ ! $? -eq 0 ]; then
+                ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                    "fail to create view, \"${CTENV_GARRAY_PARAMETERS[i]}\". skip"
+                if [ ! -z ${csBrFile} ]; then
+                    ctenv_utils_remove_brtype_obj ${brName}
+                fi
+                continue
+            fi
+
+            if ! ctenv_utils_gen_vw_line_dynamic ${vwDirName} ${brName} \
+                 >> ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_VW_LIST_FILE}; then
+                ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                    "fail to create view, \"${CTENV_GARRAY_PARAMETERS[i]}\" skip"
+                continue
+            fi
+
+            ctenv_utils_prt_success ${CTENV_GCONST_CMD_VIEW} "view, \"${CTENV_GARRAY_PARAMETERS[i]}\", is created"
+
+            if cleartool setcs -tag ${vwDirName} ${tmp_cs}; then
+                # create empty cc list file
+                ctenv_utils_touch_ccfile ${vwDirName}
+            else
+                ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "fail to set view, \"${CTENV_GARRAY_PARAMETERS[i]}\""
+            fi
+        done
+    fi
+
+    ctenv_utils_prt_success ${CTENV_GCONST_CMD_VIEW} "all views are created"
+
+    return 0
+}
+
+function ctenv_view_remove_views
+{
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "remove views"
+
+    # load tags
+    ctenv_utils_load_views_info
+
+    local tagIdxArray=(`ctenv_utils_convert_to_tag_idxs "${CTENV_GARRAY_PARAMETERS[@]}"`)
+    if [ ${#tagIdxArray[@]} -eq 0 ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "views, \"${CTENV_GARRAY_PARAMETERS[@]}\", are invalid. check them again"
+        return 1
+    fi
+
+    ctenv_utils_prt_warn ${CTENV_GCONST_CMD_VIEW} "WARN: about to PERMANENTLY delete the views."
+
+    ctenv_utils_prt_snap_views ${tagIdxArray[@]}
+    ctenv_utils_prt_dyn_views ${tagIdxArray[@]}
+
+    if ! ctenv_utils_confirm_usr_decision "Proceed?"; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "views are not removed"
+        exit 0
+    fi
+
+    echo ">> deleting views"
+    local vwDirPath=""
+    local vwTagName=""
+    local -i i=0
+    for i in ${tagIdxArray[@]}; do
+
+        vwTagName=${CTENV_GVAL_CLEARCASE_TAG_LIST[i]}
+        vwName=`ctenv_utils_get_vw_name ${vwTagName}`
+
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "view, \"${vwName}\", is being removed"
+
+        local bDeleted="FALSE"
+        if ctenv_utils_is_snapshot_view ${i}; then
+            # remove snapshot view
+            vwDirPath=${CTENV_UCONF_SNAPSHOT_ROOT_DIR}/${vwTagName}
+            if [ -d ${vwDirPath} ]; then
+                if cleartool rmview ${vwDirPath}; then
+                    bDeleted="TRUE"
+                fi
+            else
+                ctenv_utils_prt_warn ${CTENV_GCONST_CMD_VIEW} "view, \"${vwName}\", doesn't exist. skip"
+                continue
+            fi
+        else
+            # try to remove dynamic view
+            if cleartool rmview -tag ${vwTagName}; then
+                bDeleted="TRUE"
+            else
+                ctenv_utils_prt_warn ${CTENV_GCONST_CMD_VIEW} "view, \"${vwName}\", doesn't exist. skip"
+                continue
+            fi
+        fi
+
+        if [ ${bDeleted} = "TRUE" ]; then
+            if ! cleartool lsview ${vwTagName} &> /dev/null; then
+                ctenv_utils_delete_lines \
+                    ${CTENV_GCONST_PATH_ENV}/${CTENV_GCONST_VW_LIST_FILE} \
+                    "${vwTagName}"
+
+                ctenv_utils_delete_ccfile ${vwTagName}
+
+                ctenv_utils_remove_brtype_obj ${CTENV_GVAL_CLEARCASE_BRINFO_LIST[i]}
+
+                # assuming user uses emacs semanticdb
+                if [ -d ${HOME}/.emacs.d/semanticdb ]; then
+                    \rm -f "${HOME}/.emacs.d/semanticdb/"*"${vwTagName}"*
+                fi
+
+                ctenv_utils_prt_success ${CTENV_GCONST_CMD_VIEW} \
+                                        "view, \"${vwName}\", is removed"
+            fi
+        fi
+    done
+
+    ctenv_utils_prt_success ${CTENV_GCONST_CMD_VIEW} "removing view is complete"
+
+    exit 0
+}
+
+function ctenv_view_diff_view
+{
+    # check diff tool first
+    local myDiff=${CTENV_UCONF_DIFF_TOOL:-}
+    if [ -z ${myDiff} ]; then
+        myDiff="diff"
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+            "use default diffing tool, ${myDiff}"
+    fi
+    # make sure diff tool exists
+    if which ${myDiff} &> /dev/null; then
+        :
+    else
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "cannot find diffing tool, ${myDiff}"
+        return 1
+    fi
+
+    local vwTagIdx=${1:-}
+    local vwTagName=${CTENV_GVAL_CLEARCASE_TAG_LIST[${vwTagIdx}]}
+
+    local vwRootDir=`ctenv_utils_get_root_path ${vwTagIdx}`
+    if [ ! -d ${vwRootDir} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "cannot locate root dir for a view, ${vwTagName}"
+        return 1
+    fi
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                         "diffing files in a view, ${vwTagName}"
+
+    local -a diffElems=()
+    local i=""
+    for i in "${CTENV_GARRAY_DIFF_ELEMS[@]}"; do
+        if [ ! -f ${i} ] && [ ! -d ${i} ] ; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                "${i} doesn't exist"
+            return 1
+        else
+            diffElems=(${diffElems[@]} `ctenv_utils_readlink ${i}`)
+        fi
+    done
+
+    local -a diffFileList=()
+    if [ ${#diffElems[@]} -eq 0 ]; then
+        # diff all checkouts
+        diffFileList=(`ctenv_utils_get_cc_matches ${vwTagIdx} ${vwRootDir%/}`)
+    else
+        #local -a tmpFileList=()
+        for i in "${diffElems[@]}"; do
+            #tmpFileList=(`ctenv_utils_get_cc_matches ${vwTagIdx} ${i}`)
+            #
+            #if [ ${#tmpFileList[@]} -eq 0 ]; then
+            #    if [ -f ${i} ] ; then
+            #        diffFileList=(${diffFileList[@]} ${i#${vwRootDir}})
+            #    else
+            #        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+            #                             "skip \"${i#${vwRootDir}}\" because nothing checked out under this dir"
+            #    fi
+            #else
+            #    diffFileList=(${diffFileList[@]} ${tmpFileList[@]})
+            #fi
+            diffFileList=(${diffFileList[@]} ${i#${vwRootDir}})
+        done
+    fi
+
+    for (( j=0; j<${#diffFileList[@]}; j++)); do
+        if [ -d ${vwRootDir}/${diffFileList[j]} ]; then
+            ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                "skipping [${j}]: dir ${diffFileList[j]}"
+            diffFileList[j]=""
+        fi
+    done
+
+    diffFileList=("${diffFileList[@]}")
+    if [ ${#diffFileList[@]} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+            "nothing to compare in a view, ${vwTagName}"
+        return 0
+    fi
+
+    # just uniq
+    diffFileList=(`IFS=$'\n' sort -u <<< "${diffFileList[*]}"`)
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+        "listing files to be diffed"
+    for (( i=0; i<${#diffFileList[@]}; i++)); do
+        echo "  " ${i}: ${diffFileList[i]}
+    done
+    echo ""
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+        "plz wait. now searching for all latest srcs for my checked-out files"
+
+    local filePrefix="PRED"
+    local -a fileList=(`ctenv_utils_get_pred_list ${vwTagIdx} ${diffFileList[@]}`)
+    if [ ${CTENV_GVAL_OPT_DIFF_MODE} = ${CTENV_GCONST_CMD_DIFF1} ]; then
+        local -i ago=${CTENV_GVAL_CMD_DIFF_AGO}-1
+
+        if [ ${ago} -ge 1 ]; then
+            fileList=(`ctenv_utils_get_parent_list ${ago} ${fileList[@]}`)
+            filePrefix="PARE"
+        else
+            CTENV_GVAL_OPT_DIFF_MODE=${CTENV_GCONST_CMD_DIFF}
+        fi
+    fi
+
+    local -a latestFileList=()
+    latestFileList=(`ctenv_utils_get_latest_list ${fileList[@]}`)
+
+    if [ ! ${#fileList[@]} -eq ${#latestFileList[@]} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "internal error. fileList != latestFileList in a view, ${vwTagName}"
+        return 1
+    fi
+
+    # check whether we have branch for this view or not
+    if ctenv_utils_has_branch ${vwTagIdx}; then
+        local -i i=0
+        local tmpName=""
+        for (( i=0; i<${#latestFileList[@]}; i++)); do
+            tmpName="${latestFileList[i]%/*}"
+            tmpName="${tmpName%/*}/LATEST"
+            latestFileList[i]=$tmpName
+        done
+    fi
+
+    pushd ${vwRootDir} &> /dev/null
+
+    local tmpFileB=""
+    local tmpFileC=""
+    for (( j=0; j<${#diffFileList[@]}; j++)); do
+        if [ -d ${diffFileList[j]} ]; then
+            ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                "skipping [${j}]: dir ${diffFileList[j]}"
+            continue
+        fi
+
+        if [ ${CTENV_GVAL_OPT_DIFF_MODE} = ${CTENV_GCONST_CMD_DIFF} ] && \
+               cleartool diff -pred ${diffFileList[j]} >& /dev/null; then
+            ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                                 "skipping [${j}], ${diffFileList[j]}, same as its predecessor"
+            continue
+        fi
+
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+            "diffing[${j}]"
+        echo "  A: \"${diffFileList[j]}\""
+        echo "  B: \"${fileList[j]}\""
+        if [ ${CTENV_GVAL_OPT_DIFF_MODE} =  ${CTENV_GCONST_CMD_DIFF3} ]; then
+            echo "  C: \"${latestFileList[j]}\""
+        fi
+
+        # generate tmp file to fetch the predecessor from clearcase repo
+        # params of ctenv_utils_get_tmp_file
+        # first: prefix, second: suffix
+        # remove './' and '/' to have a proper tmp filename
+        # add file ext for syntax coloring when diffing
+        tmpFileB=${diffFileList[j]#./}
+        tmpFileB=${tmpFileB//\//_}
+        tmpFileB=$(ctenv_utils_get_tmp_file "${tmpFileB}_${filePrefix}" ${diffFileList[j]##*\.})
+        ctenv_utils_add_tmp_file_list ${tmpFileB}
+
+        # fetch the pred
+        rm -f ${tmpFileB} && cleartool get -to ${tmpFileB} ${fileList[j]}
+
+        if [ ${CTENV_GVAL_OPT_DIFF_MODE} =  ${CTENV_GCONST_CMD_DIFF3} ]; then
+            tmpFileC=${diffFileList[j]#./}
+            tmpFileC=${tmpFileC//\//_}
+            tmpFileC=$(ctenv_utils_get_tmp_file "${tmpFileC}_LAT" ${diffFileList[j]##*\.})
+            ctenv_utils_add_tmp_file_list ${tmpFileC}
+
+            # fetch the predecessor
+            rm -f ${tmpFileC} && cleartool get -to ${tmpFileC} ${latestFileList[j]}
+            ${myDiff} ${diffFileList[j]} ${tmpFileB} ${tmpFileC}
+        else
+            ${myDiff} ${diffFileList[j]} ${tmpFileB}
+        fi
+
+        # remove the fetched
+        rm -f ${tmpFileB} ${tmpFileC}
+    done
+    echo ""
+    popd &> /dev/null
+
+    ctenv_utils_prt_success ${CTENV_GCONST_CMD_VIEW} "view, ${vwTagName}, is diffed"
+
+    return 0
+}
+
+function ctenv_view_diff_views
+{
+    if ctenv_utils_process_views "ctenv_view_diff_view" ${CTENV_GARRAY_PARAMETERS[@]}; then
+        exit 0
+    else
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "cannot complete diffing views"
+        exit 1
+    fi
+
+    exit 0
+}
+
+function ctenv_view_diff_two_views_inner
+{
+    # check diff tool first
+    local myDiff=${CTENV_UCONF_DIFF_TOOL:-}
+    if [ -z ${myDiff} ]; then
+        myDiff="diff"
+    fi
+    # make sure diff tool exists
+    if which ${myDiff} &> /dev/null; then
+        :
+    else
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "cannot find diffing tool, ${myDiff}"
+        return 1
+    fi
+
+    local vwTagIdx1=${1:-}
+    local vwTagIdx2=${2:-}
+
+    if [ -z ${vwTagIdx1} -o -z ${vwTagIdx2} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "diff two views requires two views specified"
+        return 1
+    fi
+
+    if [ ${vwTagIdx1} = ${vwTagIdx2} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "cannot diff the same views, ${vwTagIdx2}"
+        return 1
+    fi
+
+    local vwTagName1=${CTENV_GVAL_CLEARCASE_TAG_LIST[${vwTagIdx1}]}
+    local vwName1=`ctenv_utils_get_vw_name ${vwTagName1}`
+    local vwRootDir1=`ctenv_utils_get_root_path ${vwTagIdx1}`
+    if [ ! -d ${vwRootDir1} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "cannot locate root dir for a view, ${vwTagName1}"
+        return 1
+    fi
+
+    local vwTagName2=${CTENV_GVAL_CLEARCASE_TAG_LIST[${vwTagIdx2}]}
+    local vwName2=`ctenv_utils_get_vw_name ${vwTagName2}`
+    local vwRootDir2=`ctenv_utils_get_root_path ${vwTagIdx2}`
+    if [ ! -d ${vwRootDir2} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "cannot locate root dir for a view, ${vwTagName2}"
+        return 1
+    fi
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                         "diff two views, ${vwName1} and ${vwName2}"
+
+    local -a diffElems=()
+    local i=""
+    for i in "${CTENV_GARRAY_DIFF_ELEMS[@]}"; do
+        if [ ! -f ${i} ] && [ ! -d ${i} ] ; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                "${i} doesn't exist"
+            return 1
+        else
+            diffElems=(${diffElems[@]} `ctenv_utils_readlink ${i}`)
+        fi
+    done
+
+    if [ ${#diffElems[@]} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+            "nothing to compare"
+        return 0
+    fi
+
+    local vwRoot=${diffElems[0]}
+    if [ ${vwRoot} = ${vwRoot#${vwRootDir2}} ]; then
+        vwRoot=${vwRootDir1}
+    else
+        vwRoot=${vwRootDir2}
+    fi
+
+    local -a diffFileList=()
+    for i in "${diffElems[@]}"; do
+        diffFileList=(${diffFileList[@]} ${i#${vwRoot}})
+    done
+
+    if [ ${#diffFileList[@]} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+            "nothing to compare in a view, ${vwName1}"
+        return 0
+    fi
+
+    # just uniq
+    diffFileList=(`IFS=$'\n' sort -u <<< "${diffFileList[*]}"`)
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+        "listing files to be diffed"
+    for (( i=0; i<${#diffFileList[@]}; i++)); do
+        echo "  " ${i}: ${diffFileList[i]}
+    done
+    echo ""
+
+    if ! ctenv_utils_confirm_usr_decision "Diff?"; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "views are not diffed"
+        exit 0
+    fi
+
+    local tmpFileA=""
+    local tmpFileB=""
+    for (( i=0; i<${#diffFileList[@]}; i++)); do
+
+        tmpFileA="${vwRootDir1}${diffFileList[i]}"
+        tmpFileB="${vwRootDir2}${diffFileList[i]}"
+
+        if [ ! -f ${tmpFileA} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                                  "cannot locate a file, ${tmpFileA}. skipping this diff"
+            continue
+        elif [ ! -f ${tmpFileB} ]; then
+            ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                                  "cannot locate a file, ${tmpFileB}. skipping this diff"
+            continue
+        fi
+
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+            "diffing[${i}]"
+        printf "\tA: \"${tmpFileA}\"\n"
+        printf "\tB: \"${tmpFileB}\"\n"
+
+        ${myDiff} ${tmpFileA} ${tmpFileB}
+     done
+    echo ""
+
+    ctenv_utils_prt_success ${CTENV_GCONST_CMD_VIEW} \
+                            "two views, ${vwName1} and ${vwName2}, are diffed"
+
+    return 0
+}
+
+function ctenv_view_diff_two_views
+{
+    if [ ${#CTENV_GARRAY_PARAMETERS[@]} -lt 2 ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "diff two views requires two views specified"
+        exit 1
+    fi
+
+    # load tags
+    ctenv_utils_load_views_info
+
+    # note: ctenv_utils_parse_get_views does sorting internally to remove duplication
+    local idx1=`ctenv_utils_parse_get_views ${CTENV_GARRAY_PARAMETERS[0]}`
+    local idx2=`ctenv_utils_parse_get_views ${CTENV_GARRAY_PARAMETERS[1]}`
+
+    if ctenv_view_diff_two_views_inner ${idx1} ${idx2}; then
+        exit 0
+    else
+        exit 1
+    fi
+}
+
+function ctenv_view_export_view
+{
+    local tagIdx=${1:-}
+    if [ -z ${tagIdx} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "invalid tag idx"
+        return 1
+    fi
+
+    local vwTagName=${CTENV_GVAL_CLEARCASE_TAG_LIST[${tagIdx}]}
+    local vwName=`ctenv_utils_get_vw_name ${vwTagName}`
+
+    local vwRootDir=`ctenv_utils_get_root_path ${tagIdx}`
+
+    if [ ! -d ${vwRootDir} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "invalid view, ${vwName}"
+        return 1
+    fi
+
+    local exportFile=${CTENV_GVAL_PWD}/"${vwTagName}.sh"
+    if [ -f ${exportFile} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "export target already exists. please remove \"${exportFile}\""
+        return 1
+    fi
+
+    local ccListFile=`ctenv_utils_get_cc_list_file ${tagIdx}`
+    local -a chkoutFileList=(`cat ${ccListFile}`)
+
+    pushd  ${vwRootDir} &> /dev/null
+
+    local -i j=0
+    # remove pred's version info & ignore if it's dir
+    for (( j=0; j<${#chkoutFileList[@]}; j++)); do
+        chkoutFileList[j]=${chkoutFileList[j]%@@*}
+        if [ -d ${chkoutFileList[j]} ]; then
+            chkoutFileList[j]=""
+        fi
+    done
+
+    local -a expFileList=(${chkoutFileList[@]})
+    local -a baseFileList=()
+
+    if [ ${CTENV_GVAL_OPT_EXPORT_MODE} = ${CTENV_GCONST_CMD_EXPORT0} ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                             "for export0, finding all changed files in this view, ${vwName}..."
+        expFileList=(`ctenv_utils_get_changed_files_in_branch ${tagIdx}`)
+        baseFileList=(`ctenv_utils_get_pred_list ${tagIdx} ${expFileList[@]}`)
+        baseFileList=(`ctenv_utils_get_ancestor_list ${baseFileList[@]}`)
+    else
+        if [ ${#expFileList[@]} -eq 0 ]; then
+            ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                                 "nothing to export"
+            return 0
+        fi
+        baseFileList=(`ctenv_utils_get_pred_list ${tagIdx} ${expFileList[@]}`)
+    fi
+
+    if [ ! ${#expFileList[@]} -eq ${#baseFileList[@]} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                             "internal error w/ a view, ${vwName}. expFileList[@] != baseFileList[@]"
+        return 1
+    fi
+
+    local tmpDir=`ctenv_utils_get_tmp_dir`
+    ctenv_utils_add_tmp_file_list ${tmpDir}
+
+    local file=""
+    for (( j=0; j<${#expFileList[@]}; j++)); do
+        # fetch the pred
+        file="${tmpDir}/${expFileList[j]}"
+        mkdir -p `dirname ${file}` &> /dev/null
+
+        cleartool get -to ${file} ${baseFileList[j]}
+        if diff ${file} ${expFileList[j]} >& /dev/null; then
+            ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                                 "no changes in ${expFileList[j]}. not exported"
+            rm -f ${file}; expFileList[j]=""
+            baseFileList[j]=""
+        fi
+    done
+
+    local -a tmpExpFileList=(${expFileList[@]})
+    if [ ${#tmpExpFileList[@]} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                             "nothing to export in a view, ${vwName}"
+        return 0
+    fi
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+        "exporting the view, ${vwName}"
+
+    # creating tar ball for files w/ change
+    local tarFile=`ctenv_utils_get_tmp_file`
+    ctenv_utils_add_tmp_file_list ${tarFile}
+    tar cvjf ${tarFile} ${expFileList[@]}
+
+    # gen ccfile
+    echo "" >| ${tmpDir}/vobs/${CTENV_GCONST_CC_LIST_FILE}
+    for (( j=0; j<${#baseFileList[@]}; j++)); do
+        if [ ! -z ${expFileList[j]} ]; then
+            echo ${baseFileList[j]} >> ${tmpDir}/vobs/${CTENV_GCONST_CC_LIST_FILE}
+        fi
+    done
+
+    local tarFile2=`ctenv_utils_get_tmp_file`
+    ctenv_utils_add_tmp_file_list ${tarFile2}
+
+    # creating tar ball for pred
+    tar -C ${tmpDir} -cvjf ${tarFile2} vobs &> /dev/null
+
+    cp -f ${CTENV_GCONST_PATH_DAT}/${CTENV_GCONST_IMPORT_SCR_FILE} \
+        ${exportFile} &> /dev/null
+    # append cs & tar files w/ marks
+    {
+        echo "${CTENV_GCONST_CS_MARK}"
+        cleartool catcs
+        echo "" # this ensures that there is one \n btn config spec  and tar mark
+
+        echo "${CTENV_GCONST_TAR_MARK}"
+        cat ${tarFile2}
+        echo ""
+        echo "${CTENV_GCONST_TAR_MARK2}"
+        cat ${tarFile}
+
+    } >> ${exportFile}
+
+    popd &> /dev/null
+
+    ctenv_utils_prt_success ${CTENV_GCONST_CMD_VIEW} \
+        "exporting view, ${vwName}, is complete"
+    return 0
+}
+
+function ctenv_view_export_views
+{
+    if ctenv_utils_process_views "ctenv_view_export_view" ${CTENV_GARRAY_PARAMETERS[@]}; then
+        exit 0
+    else
+        exit 1
+    fi
+
+    exit 0
+}
+
+function ctenv_view_import_view
+{
+    local tagIdx=${1:-}
+    if [ -z ${tagIdx} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "invalid tag idx"
+        return 1
+    fi
+
+    local vwTagName=${CTENV_GVAL_CLEARCASE_TAG_LIST[${tagIdx}]}
+    local vwName=`ctenv_utils_get_vw_name ${vwTagName}`
+
+    if [ ! -f ${CTENV_GVAL_IMPORT_FILE} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "import file, ${CTENV_GVAL_IMPORT_FILE} doesn't exist"
+        return 1
+    fi
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "importing changes to a view, ${vwName}"
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                         "step1: extracting changes from ${CTENV_GVAL_IMPORT_FILE}"
+
+    local tmpDir=`ctenv_utils_get_tmp_dir`
+    ctenv_utils_add_tmp_file_list ${tmpDir}
+    rmdir ${tmpDir} && ${CTENV_GVAL_IMPORT_FILE} -e ${tmpDir} | grep -v CTENV | \
+            xargs -I {} printf "\t%s\n" {}
+
+    if [ $? -ne 0 ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "fail to extract changes"
+        return 1
+    fi
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                         "step2: generating a patch file "
+
+    local -r CONST_CTENV_IMPORT_PATCH_FILE=`ctenv_utils_get_tmp_file`
+    ctenv_utils_add_tmp_file_list ${CONST_CTENV_IMPORT_PATCH_FILE}
+
+    \rm -f ${CONST_CTENV_IMPORT_PATCH_FILE} >& /dev/null
+    ${CTENV_GVAL_IMPORT_FILE} -p ${CONST_CTENV_IMPORT_PATCH_FILE} | grep -v CTENV | \
+        xargs -I {} printf "\t%s\n" {}
+
+    if [ $? -ne 0 ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "fail to create a patch file"
+        return 1
+    fi
+
+    local -a importFileList=(`cat ${tmpDir}/${CTENV_GCONST_CC_LIST_FILE}`)
+
+    if [ ${#importFileList[@]} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+            "nothing to import from a file, ${CTENV_GVAL_IMPORT_FILE}"
+        return 0
+    fi
+
+    local listFile=`ctenv_utils_get_cc_list_file ${tagIdx}`
+    if [ -z ${listFile} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "internal error at listFile in vw_import_view. please report"
+        return 1
+    fi
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+        "step3: checking out files to be imported"
+
+    local vwRootDir=`ctenv_utils_get_root_path ${tagIdx}`
+    local -a coFiles=()
+    local i=""
+    for i in "${importFileList[@]}"; do
+        coFiles[${#coFiles[@]}]=${vwRootDir}${i%@@*}
+    done
+
+    local -a notExist=()
+    for i in "${coFiles[@]}"; do
+        if [ ! -f ${i} ]; then
+            notExist[${#notExist[@]}]=${i}
+        fi
+    done
+
+    if [ ! ${#notExist[@]} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "some files doesn't exist in a target branch. they are:"
+        echo ""
+        for i in "${notExist[@]}"; do
+            echo $i
+        done
+
+        echo ""
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "please ctadd them and try again"
+
+        return 1
+    fi
+
+    if ! ctenv_utils_check_out_files_int ${tagIdx} ${listFile} ${coFiles[@]}; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "error in checking out files. stop importing."
+        return 1
+    fi
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+        "step4: applying the patch to the view, ${vwName}"
+
+    local patch="/home/yohwang/opt/bin/patch"
+    if ${patch} -p1 -l -N -t --merge -d ${vwRootDir} -i ${CONST_CTENV_IMPORT_PATCH_FILE}; then
+        ctenv_utils_prt_success ${CTENV_GCONST_CMD_VIEW} \
+            "importing to the view, ${vwName}, is complete"
+        return 0
+    else
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "import cannot be fully automatic. check open files and resolve the conflicts manually"
+        return 1
+    fi
+
+    return 0
+}
+
+function ctenv_view_import_views
+{
+    if ctenv_utils_process_views "ctenv_view_import_view" ${CTENV_GARRAY_PARAMETERS[@]}; then
+        exit 0
+    else
+        exit 1
+    fi
+
+    exit 0
+}
+
+function ctenv_view_checkin_view
+{
+    local vwTagIdx=${1:-}
+
+    local vwTagName=${CTENV_GVAL_CLEARCASE_TAG_LIST[${vwTagIdx}]}
+    local vwName=`ctenv_utils_get_vw_name ${vwTagName}`
+
+    if [ ${CTENV_GFLAG_VIEW_COMMIT} = "TRUE" ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "commit view, ${vwName}"
+    else
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "checkin view, ${vwName}"
+    fi
+
+    local listFile=`ctenv_utils_get_cc_list_file ${tagIdxArray[0]}`
+    if [ -z ${listFile} ] || [ ! -f ${listFile} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "internal error at vw_checkin_view. please report"
+        return 1
+    fi
+
+    local vwRoot=`ctenv_utils_get_root_path ${vwTagIdx}`
+    if [ ! -d ${vwRoot} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "cannot locate root dir for a view. please report"
+        return 1
+    fi
+
+    local -a files=(`cat ${listFile}`)
+
+    if [ ${CTENV_GFLAG_VIEW_COMMIT} = "TRUE" ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "List of files to commit"
+    else
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "List of files to check-in"
+    fi
+
+    local -i i=0
+    local file=""
+    local -a ccFiles=()
+    for ((i=0; i<${#files[@]}; i++)); do
+        file=${files[i]%@@*}
+        if [ -f ${vwRoot}${file} ]; then
+            echo "  ${file}"
+            ccFiles[i]=${vwRoot}${file}
+        elif [ -d ${vwRoot}${file} ]; then
+            echo "  ${file}"
+            ccFiles[i]=${vwRoot}${file}
+        else
+            ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+                "cannot locate a file, ${file}, to checked-in. please report"
+            return 1
+        fi
+    done
+    echo ""
+
+    if [ ${#ccFiles[@]} -eq 0 ]; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "no files can be checked-in"
+        return 0
+    fi
+
+    if ! ctenv_utils_confirm_usr_decision "Do you want to proceed"; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "stopped"
+        return 0
+    fi
+
+    if ctenv_utils_check_in_files_int ${vwTagIdx} ${listFile} ${ccFiles[@]}; then
+        ctenv_utils_prt_success ${CTENV_GCONST_CMD_VIEW} \
+            "checkin files in the view, ${vwName}, is complete"
+
+        if [ ${CTENV_GFLAG_VIEW_COMMIT} = "TRUE" ]; then
+
+            ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} \
+                                 "checking out files"
+
+            pushd ${vwRoot} >& /dev/null
+            ctenv_utils_check_out_files_int ${vwTagIdx} ${listFile} ${ccFiles[@]}
+            popd >& /dev/null
+        fi
+        return 0
+    else
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} \
+            "checkin files in the view, ${vwName}, cannot be complete"
+        return 1
+    fi
+}
+
+function ctenv_view_checkin_views
+{
+    if ctenv_utils_process_views "ctenv_view_checkin_view" ${CTENV_GARRAY_PARAMETERS[@]}; then
+        exit 0
+    else
+        exit 1
+    fi
+
+    exit 0
+}
+
+function ctenv_view_sync_view
+{
+    local vwTagIdx=${1:-}
+
+    local vwTagName=${CTENV_GVAL_CLEARCASE_TAG_LIST[${vwTagIdx}]}
+    local vwName=`ctenv_utils_get_vw_name ${vwTagName}`
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "syncing a view, ${vwName}"
+
+    local listFile=`ctenv_utils_get_cc_list_file ${vwTagIdx}`
+    if [ -z ${listFile} ] || [ ! -f ${listFile} ]; then
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "internal error at listFile in ctenv_view_sync_view. please report"
+        return 1
+    fi
+
+    ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "listing files to be synced"
+
+    local file=""
+    local -a files=(`cat ${listFile} | sort`)
+    local -a syncFiles=()
+    local i=""
+
+    local rootPath=`ctenv_utils_get_root_path ${vwTagIdx}`
+    if [ ! ${#files[@]} -eq 0 ]; then
+        for i in "${files[@]}"; do
+            file=${i%@@*}
+            printf "\t%s\n" ${file}
+
+            file=${rootPath}${file}
+            if [ ! -f ${file} ] && [ ! -d ${file} ]; then
+                ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "internal error in ctenv_view_sync_view while listing checked-out files. please report"
+                return 1
+            else
+                syncFiles[${#syncFiles[@]}]=${file}
+            fi
+        done
+        echo ""
+    else
+        # update config spec to have current time stamp
+        ctenv_utils_touch_config_specs ${vwTagName}
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "no files need to be synced"
+        return 0
+    fi
+
+    # wait for user decision
+    if [ ${CTENV_GFLAG_INTERACTIVE} = "TRUE" ]; then
+        if ! ctenv_utils_confirm_usr_decision "sync files?"; then
+           ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "files are not synced"
+           return 0
+        fi
+    fi
+
+    # update config spec to have current time stamp
+    ctenv_utils_touch_config_specs ${vwTagName}
+
+    if ctenv_utils_sync_files_int ${vwTagIdx} ${listFile} ${syncFiles[@]}; then
+        ctenv_utils_prt_info ${CTENV_GCONST_CMD_VIEW} "sync complete"
+        return 0
+    else
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "cannot complete sync"
+        return 1
+    fi
+}
+
+function ctenv_view_sync_views
+{
+    if ctenv_utils_process_views "ctenv_view_sync_view" ${CTENV_GARRAY_PARAMETERS[@]}; then
+        exit 0
+    else
+        exit 1
+    fi
+
+    exit 0
+}
+
+
+##############################################
+# Main script starts from here!
+
+# parse options
+ctenv_view_cmd_parse $@
+if [ $? != 0 ]; then
+    ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "parsing opts failed"
+    exit 1
+fi
+
+# enable exit trap to clean up any tmp files
+trap ctenv_utils_exit INT TERM EXIT
+
+# execute view command
+case "${CTENV_GVAL_CMD_MODE}" in
+    ${CTENV_GCONST_CMD_MODE_CREATE_VW})
+        CTENV_GARRAY_TMP_FILES= ctenv_view_create_views
+        ;;
+    ${CTENV_GCONST_CMD_MODE_LIST_VW})
+        CTENV_GARRAY_TMP_FILES= ctenv_view_list_views
+        ;;
+    ${CTENV_GCONST_CMD_MODE_REMOVE_VW})
+        CTENV_GARRAY_TMP_FILES= ctenv_view_remove_views
+        ;;
+    ${CTENV_GCONST_CMD_MODE_DIFF_VW})
+        if [ ${CTENV_GVAL_OPT_DIFF_MODE} = ${CTENV_GCONST_CMD_DIFF_VW} ]; then
+            CTENV_GARRAY_TMP_FILES= ctenv_view_diff_two_views
+        else
+            CTENV_GARRAY_TMP_FILES= ctenv_view_diff_views
+        fi
+        ;;
+    ${CTENV_GCONST_CMD_MODE_EXPORT_VW})
+        CTENV_GARRAY_TMP_FILES= ctenv_view_export_views
+        ;;
+    ${CTENV_GCONST_CMD_MODE_IMPORT_VW})
+        CTENV_GARRAY_TMP_FILES= ctenv_view_import_views
+        ;;
+    ${CTENV_GCONST_CMD_MODE_CHECKIN_VW})
+        CTENV_GARRAY_TMP_FILES= ctenv_view_checkin_views
+        ;;
+    ${CTENV_GCONST_CMD_MODE_SYNC_VW})
+        CTENV_GARRAY_TMP_FILES= ctenv_view_sync_views
+        ;;
+    * )
+        ctenv_utils_prt_error ${CTENV_GCONST_CMD_VIEW} "not supported options, ${CTENV_GVAL_CMD_MODE}"
+        return 1
+        ;;
+esac
+
+exit $?

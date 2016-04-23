@@ -1,0 +1,32 @@
+#!/bin/bash
+# -------------------------------------------------------------------------
+# ctenvrc: default user configuration file for CTENV
+# -------------------------------------------------------------------------
+#            
+
+# path to root dir for snapshot view: all snapshot views will be
+# created/maintained under this dir.
+CTENV_UCONF_SNAPSHOT_ROOT_DIR="/your/snapshot/root" # __CANNOT__ be null
+
+# path to root dir for dynamic view: when you do 'cleartool startview
+# view-tag', ${CTENV_UCONF_DYNVIEW_ROOT_DIR}/view-tag is the root dir
+# for your view. usually, CTENV_UCONF_DYNVIEW_ROOT_DIR is /view
+CTENV_UCONF_DYNVIEW_ROOT_DIR="/view" # __CANNOT__ be null
+
+# path to your favorite dir in a view: files and dirs only under this
+# root in the view will processed. this is usually 'vobs' or 'vob'.
+# DO NOT start with '/'
+CTENV_UCONF_CLEARCASE_MY_SRC_ROOT="vobs" # __CANNOT__ be null
+
+# config spec root: path to dir containing your local config specs for
+#                   clearcase view. file name of config spec should
+#                   ends w/ .cs
+#
+#                   ex) CTENV_UCONF_CONFIG_SPEC_ROOT="${HOME}/localcs"
+#
+#                   NOTE: ctenv also provides default/global config spec
+CTENV_UCONF_CONFIG_SPEC_DIR="" # can be null
+
+# diff tool: custom diffing tool instead of cleardiff
+# vimdiff (or ediff available in ctenv) is recommended
+CTENV_UCONF_DIFF_TOOL="" # can be null. default is 'diff'
