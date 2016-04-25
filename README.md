@@ -16,7 +16,7 @@ Directory structure:
 
 Introduction:
 
-CTENV is a clearcase view management tool, which can dramatically
+CTENV is a bash shell script consisting of 6k lines of code. CTENV can dramatically
 simplifies your daily task for clearcase view management. It provides
 basic features, such as view creation/list/deletion/checkin|out. In
 addition to these, it also supports highly useful features, such as
